@@ -73,6 +73,7 @@ def main_keyboard():
         [KeyboardButton("📈 Отчёт"), KeyboardButton("🔗 Поиск VIN/Агрегатов")],
         [KeyboardButton("🚚 Новая Почта"), KeyboardButton("🆘 Помощь")]
     ]
+
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 def agregat_menu():
@@ -81,6 +82,7 @@ def agregat_menu():
         [KeyboardButton("➕ Добавить товар")],
         [KeyboardButton("📋 Все товары"), KeyboardButton("🔍 Поиск по модели")],
         [KeyboardButton("✏️ Изменить статус"), KeyboardButton("🔙 Назад")]
+        [KeyboardButton("❌ Отмена")] 
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
@@ -227,8 +229,17 @@ async def old_functions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "🔍 Поиск по модели":
         await update.message.reply_text("Введите модель для поиска:")
         return 0  # состояние поиска
-    elif text == "🔙 Назад":
+       elif text == "🔙 Назад":
+        # Если был незавершённый диалог, отменяем его
+        if context.user_data:
+            context.user_data.clear()
         await update.message.reply_text("Главное меню:", reply_markup=main_keyboard())
+
+    elif text == "❌ Отмена":
+        # Отменяем всё и сбрасываем состояние
+        context.user_data.clear()
+        await update.message.reply_text("Действие отменено.", reply_markup=main_keyboard())
+        return ConversationHandler.END
     else:
         await update.message.reply_text("Используйте кнопки меню.")
 
