@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 CRM-бот для продавцов генераторов и стартеров.
-Версия 4.0 – личный кабинет, аналитика, база агрегатов, вход по Telegram ID.
-Все HTML-страницы встроены, дополнительные файлы не нужны.
+Версия 4.1 – упрощённый вход + все старые функции.
 """
 import os, logging, threading, json
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -18,18 +17,15 @@ from telegram.ext import (
     CallbackQueryHandler, ConversationHandler, ContextTypes
 )
 
-# Загрузка переменных окружения
+# Переменные окружения
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_URL = os.getenv("GOOGLE_SHEET_URL")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(","))) if os.getenv("ADMIN_IDS") else []
 NOVA_POSHTA_API_KEY = os.getenv("NOVA_POSHTA_API_KEY", "")
-RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://ваш-домен.onrender.com")  # замените при необходимости
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://ваш-домен.onrender.com")
 
-# Логирование
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Google Таблица
@@ -38,7 +34,7 @@ creds = ServiceAccountCredentials.from_json_keyfile_name("google_key.json", scop
 client = gspread.authorize(creds)
 sheet = client.open_by_url(SHEET_URL).sheet1  # основной лист с товарами
 
-# ---------- НОВЫЕ ЛИСТЫ (автосоздание) ----------
+# ---------- Автосоздание листов ----------
 SHEET_STRUCTURE = {
     "Клиенты":   ["ID", "Имя", "Телефон", "Авто", "VIN", "Агрегат", "Тип", "Состояние", "Цена", "Комментарий", "Статус", "История"],
     "Агрегаты":  ["ID", "Тип", "Модель", "Аналог", "Характеристики", "Наличие", "Цена", "Гарантия"],
@@ -63,7 +59,7 @@ def init_sheets():
 
 init_sheets()
 
-# ---------- КНОПКИ (Telegram) ----------
+# ---------- Кнопки Telegram ----------
 STATUSES = ["в наличии", "продан", "в ремонте"]
 (TYPE, MODEL, PRICE, STATUS, DESCRIPTION, PHOTO) = range(6)
 
@@ -86,30 +82,18 @@ def agregat_menu():
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
-# ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------
-def get_all_rows():
-    records = sheet.get_all_records()
-    rows = []
-    for idx, record in enumerate(records, start=2):
-        record["_row"] = idx
-        rows.append(record)
-    return rows
-
-async def check_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
-
-# ---------- ВЕБ-ИНТЕРФЕЙС (HTTP-сервер) ----------
+# ---------- HTTP-сервер с упрощённым входом ----------
 class CRMHTTPHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/":
-            self._send_html(LOGIN_PAGE)
+            self._serve_html(LOGIN_PAGE)
         elif path == "/clients":
-            self._send_html(CLIENTS_PAGE)
+            self._serve_html(CLIENTS_PAGE)
         elif path == "/aggregates":
-            self._send_html(AGGREGATES_PAGE)
+            self._serve_html(AGGREGATES_PAGE)
         elif path == "/dashboard":
-            self._send_html(DASHBOARD_PAGE)
+            self._serve_html(DASHBOARD_PAGE)
         elif path == "/api/clients":
             self._api_get_clients()
         elif path == "/api/aggregates":
@@ -132,33 +116,11 @@ class CRMHTTPHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
-    def _send_html(self, content):
+    def _serve_html(self, content):
         self.send_response(200)
         self.send_header("Content-type", "text/html; charset=utf-8")
         self.end_headers()
         self.wfile.write(content.encode("utf-8"))
-
-    def _get_cookie(self, name):
-        cookies = self.headers.get("Cookie", "")
-        for c in cookies.split(";"):
-            c = c.strip()
-            if c.startswith(f"{name}="):
-                return c[len(f"{name}="):]
-        return None
-
-    def _check_auth(self):
-        token = self._get_cookie("auth_token")
-        if not token:
-            return None
-        try:
-            managers_ws = client.open_by_url(SHEET_URL).worksheet("Менеджеры")
-            records = managers_ws.get_all_records()
-            for r in records:
-                if str(r["Telegram_ID"]) == token:
-                    return token
-            return None
-        except:
-            return None
 
     def _get_json_body(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -170,47 +132,41 @@ class CRMHTTPHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
-    # API методы
-     def _api_login(self):
-        # Временная версия – пускает всех
+    # Упрощённый вход – принимает любые данные
+    def _api_login(self):
         data = self._get_json_body()
-        tg_id = data.get("tg_id", "123")
-        password = data.get("password", "")
-        # Принимаем любые данные, устанавливаем cookie с tg_id
+        tg_id = str(data.get("tg_id", "123"))
+        # Устанавливаем cookie, чтобы запомнить пользователя
         self.send_response(200)
         self.send_header("Content-type", "application/json")
         self.send_header("Set-Cookie", f"auth_token={tg_id}; Path=/")
         self.end_headers()
-        self.wfile.write(json.dumps({"ok": True, "name": "Тестовый менеджер"}).encode())
-                    return
-            self._send_json({"ok": False, "error": "Неверный ID или пароль"}, 401)
-        except Exception as e:
-            logger.error(f"Login error: {e}")
-            self.send_error(500)
+        self.wfile.write(json.dumps({"ok": True, "name": "Менеджер"}).encode())
 
+    # Проверка авторизации: пускаем всех, у кого есть cookie auth_token
+    def _check_auth(self):
+        return self.headers.get("Cookie", "").find("auth_token=") != -1
+
+    # API-методы
     def _api_get_clients(self):
         if not self._check_auth():
             self.send_error(403); return
-        data = get_clients_data()
-        self._send_json(data)
+        self._send_json(get_clients_data())
 
     def _api_get_aggregates(self):
         if not self._check_auth():
             self.send_error(403); return
-        data = get_aggregates_data()
-        self._send_json(data)
+        self._send_json(get_aggregates_data())
 
     def _api_get_analytics(self):
-        tg_id = self._check_auth()
-        if not tg_id:
+        if not self._check_auth():
             self.send_error(403); return
-        self._send_json(get_analytics(tg_id))
+        self._send_json(get_analytics_all())
 
     def _api_get_report(self):
-        tg_id = self._check_auth()
-        if not tg_id:
+        if not self._check_auth():
             self.send_error(403); return
-        self._send_json(get_manager_report(tg_id))
+        self._send_json(get_analytics_all())
 
     def _api_add_client(self):
         if not self._check_auth():
@@ -227,6 +183,14 @@ class CRMHTTPHandler(BaseHTTPRequestHandler):
         self._send_json({"ok": ok})
 
 # ---------- Функции работы с Google Sheets ----------
+def get_all_rows():
+    records = sheet.get_all_records()
+    rows = []
+    for idx, record in enumerate(records, start=2):
+        record["_row"] = idx
+        rows.append(record)
+    return rows
+
 def get_clients_data():
     try:
         ws = client.open_by_url(SHEET_URL).worksheet("Клиенты")
@@ -270,312 +234,42 @@ def add_aggregate_to_sheet(data):
     except:
         return False
 
-def get_analytics(tg_id):
+def get_analytics_all():
     try:
         deals_ws = client.open_by_url(SHEET_URL).worksheet("Сделки")
         calls_ws = client.open_by_url(SHEET_URL).worksheet("Звонки")
         deals = deals_ws.get_all_records()
         calls = calls_ws.get_all_records()
-        my_deals = [d for d in deals if str(d.get("Менеджер_ID","")) == tg_id]
-        my_calls = [c for c in calls if str(c.get("Менеджер_ID","")) == tg_id]
-        total_sales = sum(float(d.get("Сумма",0)) for d in my_deals)
-        total_deals = len(my_deals)
-        return {
-            "total_sales": total_sales,
-            "total_deals": total_deals,
-            "total_calls": len(my_calls),
-            "conversion": round(total_deals / len(my_calls) * 100, 1) if my_calls else 0
-        }
-    except Exception as e:
-        logger.error(f"Analytics error: {e}")
+        total_sales = sum(float(d.get("Сумма",0)) for d in deals)
+        total_deals = len(deals)
+        total_calls = len(calls)
+        conversion = round(total_deals / total_calls * 100, 1) if total_calls else 0
+        return {"total_sales": total_sales, "total_deals": total_deals, "total_calls": total_calls, "conversion": conversion}
+    except:
         return {"total_sales":0, "total_deals":0, "total_calls":0, "conversion":0}
 
-def get_manager_report(tg_id):
-    return get_analytics(tg_id)  # для простоты возвращаем ту же аналитику
+# ---------- HTML-страницы ----------
+LOGIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Вход в CRM</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light d-flex justify-content-center align-items-center vh-100"><div class="card p-4 shadow" style="width:320px"><h4 class="mb-3">🔐 Вход в CRM</h4><input class="form-control mb-2" placeholder="Telegram ID (любой)" id="tg_id"><input class="form-control mb-2" type="password" placeholder="Пароль (любой)" id="password"><button class="btn btn-primary w-100" onclick="login()">Войти</button><div id="error" class="text-danger mt-2" style="display:none"></div></div><script>async function login(){const tg_id=document.getElementById('tg_id').value;const password=document.getElementById('password').value;const res=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tg_id,password})});const data=await res.json();if(data.ok){window.location.href='/dashboard'}else{document.getElementById('error').textContent=data.error||'Ошибка';document.getElementById('error').style.display='block'}}</script></body></html>"""
 
-# ---------- ВСТРОЕННЫЕ HTML-СТРАНИЦЫ ----------
-LOGIN_PAGE = """
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Вход в CRM</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body class="bg-light d-flex justify-content-center align-items-center vh-100">
-<div class="card p-4 shadow" style="width: 320px;">
-  <h4 class="mb-3">🔐 Вход в CRM</h4>
-  <input class="form-control mb-2" placeholder="Telegram ID" id="tg_id">
-  <input class="form-control mb-2" type="password" placeholder="Пароль" id="password">
-  <button class="btn btn-primary w-100" onclick="login()">Войти</button>
-  <div id="error" class="text-danger mt-2" style="display:none;"></div>
-</div>
-<script>
-  async function login() {
-    const tg_id = document.getElementById('tg_id').value;
-    const password = document.getElementById('password').value;
-    const res = await fetch('/api/login', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({tg_id, password})
-    });
-    const data = await res.json();
-    if (data.ok) {
-      window.location.href = '/dashboard';
-    } else {
-      document.getElementById('error').textContent = data.error || 'Ошибка';
-      document.getElementById('error').style.display = 'block';
-    }
-  }
-</script>
-</body>
-</html>
-"""
+CLIENTS_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Клиенты</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><nav class="navbar navbar-expand navbar-dark bg-dark mb-3"><div class="container"><a class="navbar-brand" href="#">CRM</a><div class="navbar-nav"><a class="nav-link" href="/dashboard">Аналитика</a><a class="nav-link active" href="/clients">Клиенты</a><a class="nav-link" href="/aggregates">Агрегаты</a></div></div></nav><div class="container"><h2>📋 Клиенты</h2><button class="btn btn-success mb-3" onclick="toggleForm()">➕ Добавить клиента</button><div id="addForm" class="card p-3 mb-3 d-none"><div class="row g-2"><div class="col-md-4"><input class="form-control" placeholder="Имя" id="name"></div><div class="col-md-4"><input class="form-control" placeholder="Телефон" id="phone"></div><div class="col-md-4"><input class="form-control" placeholder="Авто" id="auto"></div><div class="col-md-4"><input class="form-control" placeholder="VIN" id="vin"></div><div class="col-md-4"><input class="form-control" placeholder="Агрегат" id="unit"></div><div class="col-md-2"><select class="form-select" id="unit_type"><option>Стартер</option><option>Генератор</option></select></div><div class="col-md-2"><select class="form-select" id="condition"><option>Новый</option><option>Восстановленный</option><option>Б/У</option></select></div><div class="col-md-2"><input class="form-control" placeholder="Цена" id="price"></div><div class="col-md-6"><input class="form-control" placeholder="Комментарий" id="comment"></div><div class="col-md-3"><select class="form-select" id="status"><option>Новый</option><option>В обработке</option><option>Закрыт</option></select></div><div class="col-12 mt-2"><button class="btn btn-primary" onclick="addClient()">Сохранить</button><button class="btn btn-secondary" onclick="toggleForm()">Отмена</button></div></div></div><table class="table table-bordered bg-white"><thead><tr><th>Имя</th><th>Телефон</th><th>Авто</th><th>VIN</th><th>Агрегат</th><th>Тип</th><th>Состояние</th><th>Цена</th><th>Статус</th><th>Комментарий</th></tr></thead><tbody id="clients-body"></tbody></table></div><script>function toggleForm(){document.getElementById('addForm').classList.toggle('d-none')}async function loadClients(){const res=await fetch('/api/clients');if(res.status===403){window.location.href='/';return}const data=await res.json();const tbody=document.getElementById('clients-body');tbody.innerHTML=data.map(c=>`<tr><td>${c.Имя||''}</td><td>${c.Телефон||''}</td><td>${c.Авто||''}</td><td>${c.VIN||''}</td><td>${c.Агрегат||''}</td><td>${c.Тип||''}</td><td>${c.Состояние||''}</td><td>${c.Цена||''}</td><td>${c.Статус||''}</td><td>${c.Комментарий||''}</td></tr>`).join('')}async function addClient(){const data={name:document.getElementById('name').value,phone:document.getElementById('phone').value,auto:document.getElementById('auto').value,vin:document.getElementById('vin').value,unit:document.getElementById('unit').value,unit_type:document.getElementById('unit_type').value,condition:document.getElementById('condition').value,price:document.getElementById('price').value,comment:document.getElementById('comment').value,status:document.getElementById('status').value,history:''};await fetch('/api/add_client',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});toggleForm();loadClients()}loadClients()</script></body></html>"""
 
-CLIENTS_PAGE = """
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Клиенты</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body class="bg-light">
-<nav class="navbar navbar-expand navbar-dark bg-dark mb-3">
-  <div class="container">
-    <a class="navbar-brand" href="#">CRM</a>
-    <div class="navbar-nav">
-      <a class="nav-link" href="/dashboard">Аналитика</a>
-      <a class="nav-link active" href="/clients">Клиенты</a>
-      <a class="nav-link" href="/aggregates">Агрегаты</a>
-    </div>
-  </div>
-</nav>
-<div class="container">
-  <h2>📋 Клиенты</h2>
-  <button class="btn btn-success mb-3" onclick="toggleForm()">➕ Добавить клиента</button>
-  <div id="addForm" class="card p-3 mb-3 d-none">
-    <!-- поля формы, аналогично предыдущей версии -->
-    <div class="row g-2">
-      <div class="col-md-4"><input class="form-control" placeholder="Имя" id="name"></div>
-      <div class="col-md-4"><input class="form-control" placeholder="Телефон" id="phone"></div>
-      <div class="col-md-4"><input class="form-control" placeholder="Авто" id="auto"></div>
-      <div class="col-md-4"><input class="form-control" placeholder="VIN" id="vin"></div>
-      <div class="col-md-4"><input class="form-control" placeholder="Агрегат" id="unit"></div>
-      <div class="col-md-2"><select class="form-select" id="unit_type"><option>Стартер</option><option>Генератор</option></select></div>
-      <div class="col-md-2"><select class="form-select" id="condition"><option>Новый</option><option>Восстановленный</option><option>Б/У</option></select></div>
-      <div class="col-md-2"><input class="form-control" placeholder="Цена" id="price"></div>
-      <div class="col-md-6"><input class="form-control" placeholder="Комментарий" id="comment"></div>
-      <div class="col-md-3"><select class="form-select" id="status"><option>Новый</option><option>В обработке</option><option>Закрыт</option></select></div>
-      <div class="col-12 mt-2">
-        <button class="btn btn-primary" onclick="addClient()">Сохранить</button>
-        <button class="btn btn-secondary" onclick="toggleForm()">Отмена</button>
-      </div>
-    </div>
-  </div>
-  <table class="table table-bordered bg-white">
-    <thead><tr><th>Имя</th><th>Телефон</th><th>Авто</th><th>VIN</th><th>Агрегат</th><th>Тип</th><th>Состояние</th><th>Цена</th><th>Статус</th><th>Комментарий</th></tr></thead>
-    <tbody id="clients-body"></tbody>
-  </table>
-</div>
-<script>
-  function toggleForm() { document.getElementById('addForm').classList.toggle('d-none'); }
-  async function loadClients() {
-    const res = await fetch('/api/clients');
-    if (res.status === 403) { window.location.href = '/'; return; }
-    const data = await res.json();
-    const tbody = document.getElementById('clients-body');
-    tbody.innerHTML = data.map(c => `<tr>
-      <td>${c.Имя||''}</td><td>${c.Телефон||''}</td><td>${c.Авто||''}</td><td>${c.VIN||''}</td>
-      <td>${c.Агрегат||''}</td><td>${c.Тип||''}</td><td>${c.Состояние||''}</td><td>${c.Цена||''}</td>
-      <td>${c.Статус||''}</td><td>${c.Комментарий||''}</td>
-    </tr>`).join('');
-  }
-  async function addClient() {
-    const data = {
-      name: document.getElementById('name').value,
-      phone: document.getElementById('phone').value,
-      auto: document.getElementById('auto').value,
-      vin: document.getElementById('vin').value,
-      unit: document.getElementById('unit').value,
-      unit_type: document.getElementById('unit_type').value,
-      condition: document.getElementById('condition').value,
-      price: document.getElementById('price').value,
-      comment: document.getElementById('comment').value,
-      status: document.getElementById('status').value,
-      history: ''
-    };
-    await fetch('/api/add_client', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(data)
-    });
-    toggleForm();
-    loadClients();
-  }
-  loadClients();
-</script>
-</body>
-</html>
-"""
+AGGREGATES_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Агрегаты</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><nav class="navbar navbar-expand navbar-dark bg-dark mb-3"><div class="container"><a class="navbar-brand" href="#">CRM</a><div class="navbar-nav"><a class="nav-link" href="/dashboard">Аналитика</a><a class="nav-link" href="/clients">Клиенты</a><a class="nav-link active" href="/aggregates">Агрегаты</a></div></div></nav><div class="container"><h2>🗄️ Агрегаты</h2><button class="btn btn-success mb-3" onclick="toggleForm()">➕ Добавить агрегат</button><div id="addForm" class="card p-3 mb-3 d-none"><div class="row g-2"><div class="col-md-3"><select class="form-select" id="type"><option>Стартер</option><option>Генератор</option></select></div><div class="col-md-3"><input class="form-control" placeholder="Модель" id="model"></div><div class="col-md-3"><input class="form-control" placeholder="Аналог" id="analog"></div><div class="col-md-3"><input class="form-control" placeholder="Характеристики" id="features"></div><div class="col-md-3"><input class="form-control" placeholder="Наличие" id="availability"></div><div class="col-md-2"><input class="form-control" placeholder="Цена" id="price"></div><div class="col-md-2"><input class="form-control" placeholder="Гарантия" id="warranty"></div><div class="col-12 mt-2"><button class="btn btn-primary" onclick="addAggregate()">Сохранить</button><button class="btn btn-secondary" onclick="toggleForm()">Отмена</button></div></div></div><table class="table table-bordered bg-white"><thead><tr><th>Тип</th><th>Модель</th><th>Аналог</th><th>Характеристики</th><th>Наличие</th><th>Цена</th><th>Гарантия</th></tr></thead><tbody id="agg-body"></tbody></table></div><script>function toggleForm(){document.getElementById('addForm').classList.toggle('d-none')}async function loadAggregates(){const res=await fetch('/api/aggregates');if(res.status===403){window.location.href='/';return}const data=await res.json();const tbody=document.getElementById('agg-body');tbody.innerHTML=data.map(a=>`<tr><td>${a.Тип||''}</td><td>${a.Модель||''}</td><td>${a.Аналог||''}</td><td>${a.Характеристики||''}</td><td>${a.Наличие||''}</td><td>${a.Цена||''}</td><td>${a.Гарантия||''}</td></tr>`).join('')}async function addAggregate(){const data={type:document.getElementById('type').value,model:document.getElementById('model').value,analog:document.getElementById('analog').value,features:document.getElementById('features').value,availability:document.getElementById('availability').value,price:document.getElementById('price').value,warranty:document.getElementById('warranty').value};await fetch('/api/add_aggregate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});toggleForm();loadAggregates()}loadAggregates()</script></body></html>"""
 
-AGGREGATES_PAGE = """
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Агрегаты</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body class="bg-light">
-<nav class="navbar navbar-expand navbar-dark bg-dark mb-3">
-  <div class="container">
-    <a class="navbar-brand" href="#">CRM</a>
-    <div class="navbar-nav">
-      <a class="nav-link" href="/dashboard">Аналитика</a>
-      <a class="nav-link" href="/clients">Клиенты</a>
-      <a class="nav-link active" href="/aggregates">Агрегаты</a>
-    </div>
-  </div>
-</nav>
-<div class="container">
-  <h2>🗄️ Агрегаты</h2>
-  <button class="btn btn-success mb-3" onclick="toggleForm()">➕ Добавить агрегат</button>
-  <div id="addForm" class="card p-3 mb-3 d-none">
-    <div class="row g-2">
-      <div class="col-md-3"><select class="form-select" id="type"><option>Стартер</option><option>Генератор</option></select></div>
-      <div class="col-md-3"><input class="form-control" placeholder="Модель" id="model"></div>
-      <div class="col-md-3"><input class="form-control" placeholder="Аналог" id="analog"></div>
-      <div class="col-md-3"><input class="form-control" placeholder="Характеристики" id="features"></div>
-      <div class="col-md-3"><input class="form-control" placeholder="Наличие" id="availability"></div>
-      <div class="col-md-2"><input class="form-control" placeholder="Цена" id="price"></div>
-      <div class="col-md-2"><input class="form-control" placeholder="Гарантия" id="warranty"></div>
-      <div class="col-12 mt-2">
-        <button class="btn btn-primary" onclick="addAggregate()">Сохранить</button>
-        <button class="btn btn-secondary" onclick="toggleForm()">Отмена</button>
-      </div>
-    </div>
-  </div>
-  <table class="table table-bordered bg-white">
-    <thead><tr><th>Тип</th><th>Модель</th><th>Аналог</th><th>Характеристики</th><th>Наличие</th><th>Цена</th><th>Гарантия</th></tr></thead>
-    <tbody id="agg-body"></tbody>
-  </table>
-</div>
-<script>
-  function toggleForm() { document.getElementById('addForm').classList.toggle('d-none'); }
-  async function loadAggregates() {
-    const res = await fetch('/api/aggregates');
-    if (res.status === 403) { window.location.href = '/'; return; }
-    const data = await res.json();
-    const tbody = document.getElementById('agg-body');
-    tbody.innerHTML = data.map(a => `<tr>
-      <td>${a.Тип||''}</td><td>${a.Модель||''}</td><td>${a.Аналог||''}</td>
-      <td>${a.Характеристики||''}</td><td>${a.Наличие||''}</td><td>${a.Цена||''}</td><td>${a.Гарантия||''}</td>
-    </tr>`).join('');
-  }
-  async function addAggregate() {
-    const data = {
-      type: document.getElementById('type').value,
-      model: document.getElementById('model').value,
-      analog: document.getElementById('analog').value,
-      features: document.getElementById('features').value,
-      availability: document.getElementById('availability').value,
-      price: document.getElementById('price').value,
-      warranty: document.getElementById('warranty').value
-    };
-    await fetch('/api/add_aggregate', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(data)
-    });
-    toggleForm();
-    loadAggregates();
-  }
-  loadAggregates();
-</script>
-</body>
-</html>
-"""
+DASHBOARD_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Аналитика</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><nav class="navbar navbar-expand navbar-dark bg-dark mb-3"><div class="container"><a class="navbar-brand" href="#">CRM</a><div class="navbar-nav"><a class="nav-link active" href="/dashboard">Аналитика</a><a class="nav-link" href="/clients">Клиенты</a><a class="nav-link" href="/aggregates">Агрегаты</a></div></div></nav><div class="container"><h2>📊 Общая аналитика</h2><div class="row" id="stats"><div class="col-md-3"><div class="card p-3"><h6>Продажи</h6><h4 id="total_sales">0</h4></div></div><div class="col-md-3"><div class="card p-3"><h6>Сделок</h6><h4 id="total_deals">0</h4></div></div><div class="col-md-3"><div class="card p-3"><h6>Звонков</h6><h4 id="total_calls">0</h4></div></div><div class="col-md-3"><div class="card p-3"><h6>Конверсия</h6><h4 id="conversion">0%</h4></div></div></div></div><script>async function loadAnalytics(){const res=await fetch('/api/analytics');if(res.status===403){window.location.href='/';return}const data=await res.json();document.getElementById('total_sales').textContent=data.total_sales+'₴';document.getElementById('total_deals').textContent=data.total_deals;document.getElementById('total_calls').textContent=data.total_calls;document.getElementById('conversion').textContent=data.conversion+'%'}loadAnalytics()</script></body></html>"""
 
-DASHBOARD_PAGE = """
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Аналитика и отчёт</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body class="bg-light">
-<nav class="navbar navbar-expand navbar-dark bg-dark mb-3">
-  <div class="container">
-    <a class="navbar-brand" href="#">CRM</a>
-    <div class="navbar-nav">
-      <a class="nav-link active" href="/dashboard">Аналитика</a>
-      <a class="nav-link" href="/clients">Клиенты</a>
-      <a class="nav-link" href="/aggregates">Агрегаты</a>
-    </div>
-  </div>
-</nav>
-<div class="container">
-  <h2>📊 Моя аналитика</h2>
-  <div class="row" id="stats">
-    <div class="col-md-3"><div class="card p-3"><h6>Продажи</h6><h4 id="total_sales">0</h4></div></div>
-    <div class="col-md-3"><div class="card p-3"><h6>Сделок</h6><h4 id="total_deals">0</h4></div></div>
-    <div class="col-md-3"><div class="card p-3"><h6>Звонков</h6><h4 id="total_calls">0</h4></div></div>
-    <div class="col-md-3"><div class="card p-3"><h6>Конверсия</h6><h4 id="conversion">0%</h4></div></div>
-  </div>
-</div>
-<script>
-  async function loadAnalytics() {
-    const res = await fetch('/api/analytics');
-    if (res.status === 403) { window.location.href = '/'; return; }
-    const data = await res.json();
-    document.getElementById('total_sales').textContent = data.total_sales + '₴';
-    document.getElementById('total_deals').textContent = data.total_deals;
-    document.getElementById('total_calls').textContent = data.total_calls;
-    document.getElementById('conversion').textContent = data.conversion + '%';
-  }
-  loadAnalytics();
-</script>
-</body>
-</html>
-"""
-
-# ---------- ОБРАБОТЧИКИ TELEGRAM (старые функции) ----------
+# ---------- Telegram-обработчики ----------
 async def start(update, context):
-    await update.message.reply_text(
-        "👋 Добро пожаловать в CRM!\nИспользуйте кнопки.",
-        reply_markup=main_keyboard()
-    )
+    await update.message.reply_text("👋 Добро пожаловать в CRM!\nИспользуйте кнопки.", reply_markup=main_keyboard())
 
 async def help_command(update, context):
     await update.message.reply_text(
-        "📌 *CRM бот*\n\n"
-        "📋 Клиенты — карточки клиентов\n"
-        "🗄️ Агрегаты — база товаров\n"
-        "📜 Скрипты — ответы на возражения\n"
-        "📊 Аналитика — статистика\n"
-        "📈 Отчёт — ежедневный отчёт\n"
-        "🔗 Поиск VIN/Агрегатов — Avto.pro, Exist.ua\n"
-        "🚚 Новая Почта — трекинг и срок доставки\n"
-        "📱 Приложение — открыть веб-интерфейс\n"
-        "🆘 Помощь — это сообщение",
-        parse_mode="Markdown",
-        reply_markup=main_keyboard()
+        "📌 *CRM бот*\n\n📋 Клиенты — карточки клиентов\n🗄️ Агрегаты — база товаров\n📜 Скрипты — ответы на возражения\n📊 Аналитика — статистика\n📈 Отчёт — ежедневный отчёт\n🔗 Поиск VIN/Агрегатов — Avto.pro, Exist.ua\n🚚 Новая Почта — трекинг и срок доставки\n📱 Приложение — открыть веб-интерфейс\n🆘 Помощь — это сообщение",
+        parse_mode="Markdown", reply_markup=main_keyboard()
     )
 
 async def clients_start(update, context):
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Открыть CRM", web_app=WebAppInfo(url=RENDER_URL))]
-    ])
-    await update.message.reply_text(
-        "📋 Нажмите кнопку, чтобы открыть базу клиентов в приложении.",
-        reply_markup=keyboard
-    )
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Открыть CRM", web_app=WebAppInfo(url=RENDER_URL))]])
+    await update.message.reply_text("📋 Нажмите кнопку, чтобы открыть базу клиентов.", reply_markup=keyboard)
 
 async def agregat_start(update, context):
     await update.message.reply_text("🗄️ База агрегатов:", reply_markup=agregat_menu())
@@ -596,15 +290,11 @@ async def scripts_start(update, context):
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_keyboard())
 
 async def analytics_start(update, context):
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Открыть аналитику", web_app=WebAppInfo(url=RENDER_URL + "/dashboard"))]
-    ])
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Открыть аналитику", web_app=WebAppInfo(url=RENDER_URL + "/dashboard"))]])
     await update.message.reply_text("📊 Нажмите, чтобы посмотреть аналитику.", reply_markup=keyboard)
 
 async def report_start(update, context):
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Открыть отчёт", web_app=WebAppInfo(url=RENDER_URL + "/dashboard"))]
-    ])
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Открыть отчёт", web_app=WebAppInfo(url=RENDER_URL + "/dashboard"))]])
     await update.message.reply_text("📈 Ваш персональный отчёт доступен в личном кабинете.", reply_markup=keyboard)
 
 async def search_start(update, context):
@@ -622,9 +312,7 @@ async def nova_poshta_start(update, context):
     await update.message.reply_text("🚚 Новая Почта – выберите действие:", reply_markup=keyboard)
 
 async def open_webapp(update, context):
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Открыть приложение", web_app=WebAppInfo(url=RENDER_URL))]
-    ])
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Открыть приложение", web_app=WebAppInfo(url=RENDER_URL))]])
     await update.message.reply_text("Нажмите, чтобы открыть CRM как приложение.", reply_markup=keyboard)
 
 async def handle_main_menu(update, context):
@@ -665,10 +353,7 @@ async def old_functions(update, context):
     elif text == "✏️ Изменить статус":
         await change_status_start(update, context)
     elif text == "➕ Добавить товар":
-        await update.message.reply_text(
-            "Выберите тип товара:",
-            reply_markup=ReplyKeyboardMarkup([["Генератор", "Стартер"]], one_time_keyboard=True, resize_keyboard=True)
-        )
+        await update.message.reply_text("Выберите тип товара:", reply_markup=ReplyKeyboardMarkup([["Генератор", "Стартер"]], one_time_keyboard=True, resize_keyboard=True))
         return TYPE
     elif text == "🔍 Поиск по модели":
         await update.message.reply_text("Введите модель для поиска:")
@@ -680,7 +365,7 @@ async def old_functions(update, context):
     else:
         await update.message.reply_text("Используйте кнопки меню.")
 
-# ---------- СТАРЫЕ ФУНКЦИИ (с гривнами) ----------
+# Старые функции добавления товара, изменения статуса, поиска и т.д.
 async def show_all_products(update, context):
     rows = get_all_rows()
     if not rows:
@@ -706,12 +391,7 @@ async def product_detail(update, context):
             await query.edit_message_text("Ошибка: неполные данные.")
             return
         _, typ, model, price, status, desc, photo_id = row_values[:7]
-        text = (
-            f"*{typ}* — {model}\n"
-            f"Цена: {price}₴\n"
-            f"Статус: {status}\n"
-            f"Описание: {desc}"
-        )
+        text = f"*{typ}* — {model}\nЦена: {price}₴\nСтатус: {status}\nОписание: {desc}"
         if photo_id:
             await context.bot.send_photo(chat_id=query.message.chat_id, photo=photo_id, caption=text, parse_mode="Markdown")
         else:
@@ -720,12 +400,8 @@ async def product_detail(update, context):
         logger.error(f"Ошибка деталей: {e}")
         await query.edit_message_text("Не удалось загрузить данные.")
 
-# --- Добавление товара (Conversation) ---
 async def add_product_start(update, context):
-    await update.message.reply_text(
-        "Выберите тип товара:",
-        reply_markup=ReplyKeyboardMarkup([["Генератор", "Стартер"]], one_time_keyboard=True, resize_keyboard=True)
-    )
+    await update.message.reply_text("Выберите тип товара:", reply_markup=ReplyKeyboardMarkup([["Генератор", "Стартер"]], one_time_keyboard=True, resize_keyboard=True))
     return TYPE
 
 async def add_type(update, context):
@@ -753,10 +429,7 @@ async def add_price(update, context):
         await update.message.reply_text("Цена должна быть целым числом.")
         return PRICE
     context.user_data["price"] = price
-    await update.message.reply_text(
-        "Выберите статус:",
-        reply_markup=ReplyKeyboardMarkup([[s] for s in STATUSES], one_time_keyboard=True, resize_keyboard=True)
-    )
+    await update.message.reply_text("Выберите статус:", reply_markup=ReplyKeyboardMarkup([[s] for s in STATUSES], one_time_keyboard=True, resize_keyboard=True))
     return STATUS
 
 async def add_status(update, context):
@@ -785,17 +458,13 @@ async def add_photo(update, context):
     else:
         await update.message.reply_text("Отправьте фото или напишите 'нет'.")
         return PHOTO
-
     data = context.user_data
     all_rows = get_all_rows()
     new_id = max([int(r["ID"]) for r in all_rows if r["ID"].isdigit()] + [0]) + 1
     try:
         sheet.append_row([str(new_id), data["type"], data["model"], str(data["price"]),
                           data["status"], data["description"], photo_id])
-        await update.message.reply_text(
-            f"✅ Товар *{data['model']}* добавлен! (ID {new_id})",
-            parse_mode="Markdown", reply_markup=agregat_menu()
-        )
+        await update.message.reply_text(f"✅ Товар *{data['model']}* добавлен! (ID {new_id})", parse_mode="Markdown", reply_markup=agregat_menu())
     except Exception as e:
         logger.error(f"Ошибка записи: {e}")
         await update.message.reply_text("❌ Не удалось сохранить товар.", reply_markup=agregat_menu())
@@ -807,7 +476,6 @@ async def cancel_add(update, context):
     context.user_data.clear()
     return ConversationHandler.END
 
-# --- Изменение статуса ---
 async def change_status_start(update, context):
     rows = get_all_rows()
     if not rows:
@@ -844,7 +512,6 @@ async def status_set_new(update, context):
     finally:
         context.user_data.pop("edit_row", None)
 
-# --- Поиск ---
 async def search_model_input(update, context):
     query = update.message.text.strip()
     rows = get_all_rows()
@@ -859,17 +526,15 @@ async def search_model_input(update, context):
     await update.message.reply_text("🔍 Результаты поиска:", reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
 
-# ---------- ЗАПУСК ----------
+# ---------- Запуск ----------
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # HTTP-сервер для веб-интерфейса
     port = int(os.environ.get("PORT", 8000))
     httpd = HTTPServer(("0.0.0.0", port), CRMHTTPHandler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     logger.info(f"Веб-интерфейс запущен на порту {port}")
 
-    # ConversationHandler для добавления товара
     add_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^➕ Добавить товар$"), add_product_start)],
         states={
