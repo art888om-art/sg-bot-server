@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 CRM-бот для продавцов генераторов и стартеров.
-Версия 2.0 – гривны, полноценное меню, зачатки CRM.
+Версия 3.0 – веб-интерфейс клиентов + гривны + старые функции.
 """
-import os, logging, threading
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+import os, logging, threading, json
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -22,7 +22,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_URL = os.getenv("GOOGLE_SHEET_URL")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(","))) if os.getenv("ADMIN_IDS") else []
-NOVA_POSHTA_API_KEY = os.getenv("NOVA_POSHTA_API_KEY", "")  # опционально
+NOVA_POSHTA_API_KEY = os.getenv("NOVA_POSHTA_API_KEY", "")
 
 # Логирование
 logging.basicConfig(
@@ -30,7 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Подключение к Google Таблице
+# Google Таблица
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("google_key.json", scope)
 client = gspread.authorize(creds)
@@ -38,7 +38,7 @@ client = gspread.authorize(creds)
 # Основной лист с товарами (старый)
 sheet = client.open_by_url(SHEET_URL).sheet1
 
-# ---------- НОВЫЕ ЛИСТЫ (создаются автоматически при первом запуске) ----------
+# ---------- НОВЫЕ ЛИСТЫ (создаются автоматически) ----------
 SHEET_STRUCTURE = {
     "Клиенты":   ["ID", "Имя", "Телефон", "Авто", "VIN", "Агрегат", "Тип", "Состояние", "Цена", "Комментарий", "Статус", "История"],
     "Агрегаты":  ["ID", "Тип", "Модель", "Аналог", "Характеристики", "Наличие", "Цена", "Гарантия"],
@@ -61,37 +61,32 @@ def init_sheets():
     except Exception as e:
         logger.error(f"Ошибка создания листов: {e}")
 
-# Вызвать один раз при старте
 init_sheets()
 
 # ---------- КНОПКИ ----------
+STATUSES = ["в наличии", "продан", "в ремонте"]
+(TYPE, MODEL, PRICE, STATUS, DESCRIPTION, PHOTO) = range(6)
+
 def main_keyboard():
-    """Главное меню с новыми разделами."""
     buttons = [
         [KeyboardButton("📋 Клиенты"), KeyboardButton("🗄️ Агрегаты")],
         [KeyboardButton("📜 Скрипты"), KeyboardButton("📊 Аналитика")],
         [KeyboardButton("📈 Отчёт"), KeyboardButton("🔗 Поиск VIN/Агрегатов")],
         [KeyboardButton("🚚 Новая Почта"), KeyboardButton("🆘 Помощь")]
     ]
-
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 def agregat_menu():
-    """Подменю внутри '🗄️ Агрегаты' (старые функции)."""
     buttons = [
         [KeyboardButton("➕ Добавить товар")],
         [KeyboardButton("📋 Все товары"), KeyboardButton("🔍 Поиск по модели")],
-        [KeyboardButton("✏️ Изменить статус"), KeyboardButton("🔙 Назад")]
-        [KeyboardButton("❌ Отмена")] 
+        [KeyboardButton("✏️ Изменить статус"), KeyboardButton("🔙 Назад")],
+        [KeyboardButton("❌ Отмена")]
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
-# ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (старые) ----------
-STATUSES = ["в наличии", "продан", "в ремонте"]
-(TYPE, MODEL, PRICE, STATUS, DESCRIPTION, PHOTO) = range(6)
-
+# ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------
 def get_all_rows():
-    """Возвращает все строки основного листа с товарами."""
     records = sheet.get_all_records()
     rows = []
     for idx, record in enumerate(records, start=2):
@@ -102,41 +97,183 @@ def get_all_rows():
 async def check_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
-# ---------- ОБРАБОТЧИКИ КОМАНД И КНОПОК ----------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------- ВЕБ-ИНТЕРФЕЙС (HTTP-сервер) ----------
+class CRMHTTPHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/":
+            self.send_response(200)
+            self.send_header("Content-type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(HTML_PAGE.encode("utf-8"))
+        elif self.path == "/api/clients":
+            self.send_response(200)
+            self.send_header("Content-type", "application/json; charset=utf-8")
+            self.end_headers()
+            clients = get_clients_data()
+            self.wfile.write(json.dumps(clients, ensure_ascii=False).encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self):
+        if self.path == "/api/add_client":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            data = json.loads(body.decode("utf-8"))
+            success = add_client_to_sheet(data)
+            self.send_response(200 if success else 500)
+            self.send_header("Content-type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": success}, ensure_ascii=False).encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+def get_clients_data():
+    try:
+        ws = client.open_by_url(SHEET_URL).worksheet("Клиенты")
+        records = ws.get_all_records()
+        for r in records:
+            r.pop("_row", None)
+        return records
+    except Exception as e:
+        logger.error(f"Ошибка чтения клиентов: {e}")
+        return []
+
+def add_client_to_sheet(data):
+    try:
+        ws = client.open_by_url(SHEET_URL).worksheet("Клиенты")
+        records = ws.get_all_records()
+        new_id = max([int(r["ID"]) for r in records if str(r.get("ID", "0")).isdigit()] + [0]) + 1
+        row = [
+            str(new_id),
+            data.get("name", ""),
+            data.get("phone", ""),
+            data.get("auto", ""),
+            data.get("vin", ""),
+            data.get("unit", ""),
+            data.get("unit_type", ""),
+            data.get("condition", ""),
+            data.get("price", ""),
+            data.get("comment", ""),
+            data.get("status", ""),
+            data.get("history", "")
+        ]
+        ws.append_row(row)
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка добавления клиента: {e}")
+        return False
+
+HTML_PAGE = r"""
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CRM Генераторы и Стартеры</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<div class="container py-4">
+  <h1 class="mb-4">📋 Клиенты</h1>
+  <button class="btn btn-success mb-3" onclick="document.getElementById('addForm').classList.toggle('d-none')">
+    ➕ Добавить клиента
+  </button>
+  <div id="addForm" class="card p-3 mb-4 d-none">
+    <h5>Новый клиент</h5>
+    <div class="row g-2">
+      <div class="col-md-4"><input class="form-control" placeholder="Имя" id="name"></div>
+      <div class="col-md-4"><input class="form-control" placeholder="Телефон" id="phone"></div>
+      <div class="col-md-4"><input class="form-control" placeholder="Автомобиль" id="auto"></div>
+      <div class="col-md-4"><input class="form-control" placeholder="VIN-код" id="vin"></div>
+      <div class="col-md-4"><input class="form-control" placeholder="Агрегат (стартер/генератор)" id="unit"></div>
+      <div class="col-md-2"><select class="form-select" id="unit_type"><option>Стартер</option><option>Генератор</option></select></div>
+      <div class="col-md-2"><select class="form-select" id="condition"><option>Новый</option><option>Восстановленный</option><option>Б/У</option></select></div>
+      <div class="col-md-2"><input class="form-control" placeholder="Цена" id="price"></div>
+      <div class="col-md-6"><input class="form-control" placeholder="Комментарий" id="comment"></div>
+      <div class="col-md-3"><select class="form-select" id="status"><option>Новый</option><option>В обработке</option><option>Закрыт</option></select></div>
+      <div class="col-md-12 mt-2">
+        <button class="btn btn-primary" onclick="addClient()">Сохранить</button>
+        <button class="btn btn-secondary" onclick="document.getElementById('addForm').classList.add('d-none')">Отмена</button>
+      </div>
+    </div>
+  </div>
+  <table class="table table-bordered table-hover bg-white">
+    <thead><tr><th>Имя</th><th>Телефон</th><th>Авто</th><th>VIN</th><th>Агрегат</th><th>Тип</th><th>Состояние</th><th>Цена</th><th>Статус</th><th>Комментарий</th></tr></thead>
+    <tbody id="clients-body"></tbody>
+  </table>
+</div>
+<script>
+  async function loadClients() {
+    const res = await fetch('/api/clients');
+    const clients = await res.json();
+    const tbody = document.getElementById('clients-body');
+    tbody.innerHTML = clients.map(c => `<tr>
+      <td>${c.Имя||''}</td><td>${c.Телефон||''}</td><td>${c.Авто||''}</td><td>${c.VIN||''}</td>
+      <td>${c.Агрегат||''}</td><td>${c.Тип||''}</td><td>${c.Состояние||''}</td><td>${c.Цена||''}</td>
+      <td>${c.Статус||''}</td><td>${c.Комментарий||''}</td>
+    </tr>`).join('');
+  }
+  async function addClient() {
+    const data = {
+      name: document.getElementById('name').value,
+      phone: document.getElementById('phone').value,
+      auto: document.getElementById('auto').value,
+      vin: document.getElementById('vin').value,
+      unit: document.getElementById('unit').value,
+      unit_type: document.getElementById('unit_type').value,
+      condition: document.getElementById('condition').value,
+      price: document.getElementById('price').value,
+      comment: document.getElementById('comment').value,
+      status: document.getElementById('status').value,
+      history: ''
+    };
+    await fetch('/api/add_client', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    document.getElementById('addForm').classList.add('d-none');
+    loadClients();
+  }
+  loadClients();
+</script>
+</body>
+</html>
+"""
+
+# ---------- ОБРАБОТЧИКИ TELEGRAM (старые) ----------
+async def start(update, context):
     await update.message.reply_text(
-        "👋 Добро пожаловать в CRM генераторов и стартеров!\nИспользуйте кнопки ниже.",
+        "👋 Добро пожаловать в CRM!\nИспользуйте кнопки.",
         reply_markup=main_keyboard()
     )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def help_command(update, context):
     await update.message.reply_text(
         "📌 CRM бот\n\n"
-        "📋 Клиенты — карточки клиентов (скоро)\n"
-        "🗄️ Агрегаты — база товаров и добавление\n"
-        "📜 Скрипты — готовые ответы на возражения\n"
-        "📊 Аналитика — статистика (скоро)\n"
-        "📈 Отчёт — ежедневный отчёт (скоро)\n"
+        "📋 Клиенты — карточки клиентов\n"
+        "🗄️ Агрегаты — база товаров\n"
+        "📜 Скрипты — ответы на возражения\n"
+        "📊 Аналитика — статистика\n"
+        "📈 Отчёт — ежедневный отчёт\n"
         "🔗 Поиск VIN/Агрегатов — Avto.pro, Exist.ua\n"
-        "🚚 Новая Почта — трекинг ТТН\n"
+        "🚚 Новая Почта — трекинг\n"
         "🆘 Помощь — это сообщение",
         reply_markup=main_keyboard()
     )
 
-# --- Заглушки для новых разделов ---
 async def clients_start(update, context):
     await update.message.reply_text(
-        "📋 Раздел «Клиенты» пока в разработке.\n"
-        "Здесь будет карточка клиента: имя, телефон, авто, VIN, агрегат, статус сделки и история.",
+        "📋 Раздел «Клиенты» откройте в браузере: " + os.getenv("RENDER_EXTERNAL_URL", ""),
         reply_markup=main_keyboard()
     )
 
 async def agregat_start(update, context):
-    """Переход в подменю агрегатов."""
-    await update.message.reply_text("🗄️ База агрегатов — выберите действие:", reply_markup=agregat_menu())
+    await update.message.reply_text("🗄️ База агрегатов:", reply_markup=agregat_menu())
 
 async def scripts_start(update, context):
-    """Показывает готовые ответы на возражения."""
     text = (
         "📜 *Скрипты продаж*\n\n"
         "• *Дорого*: «Мы даём гарантию 12 мес, цена оправдана.»\n"
@@ -146,49 +283,31 @@ async def scripts_start(update, context):
         "• *Если не подойдёт?*: «Пришлём фото и VIN-сверку, возврат в течение 14 дней.»\n"
         "• *Есть ли гарантия?*: «Да, 12 месяцев официальной гарантии.»\n"
         "• *Я ещё посмотрю*: «Пришлите VIN, я проверю наличие аналогов.»\n"
-        "• *Скиньте фото*: «Фото высылаем в чат, также можете запросить видео.»\n"
-        "• *А это точно подойдёт?*: «Сверяем по VIN и маркировке, даём 100% гарантию совместимости.»"
+        "• *Скиньте фото*: «Фото высылаем в чат.»\n"
+        "• *А это точно подойдёт?*: «Сверяем по VIN и маркировке, даём 100% гарантию.»"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_keyboard())
 
 async def analytics_start(update, context):
-    await update.message.reply_text(
-        "📊 Аналитика появится после накопления данных.\n"
-        "Будут отображаться конверсия, эффективность менеджеров, популярные товары.",
-        reply_markup=main_keyboard()
-    )
+    await update.message.reply_text("📊 Аналитика появится позже.", reply_markup=main_keyboard())
 
 async def report_start(update, context):
-    await update.message.reply_text(
-        "📈 Ежедневный отчёт будет автоматически отправляться админам в конце дня (скоро).",
-        reply_markup=main_keyboard()
-    )
+    await update.message.reply_text("📈 Ежедневный отчёт (скоро).", reply_markup=main_keyboard())
 
 async def search_start(update, context):
-    """Кнопки-ссылки на Avto.pro и Exist.ua."""
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🚗 Avto.pro (подбор агрегатов)", url="https://avto.pro/catalog/")],
         [InlineKeyboardButton("🔎 Exist.ua (пробив по VIN)", url="https://exist.ua/")],
     ])
-    await update.message.reply_text(
-        "🔗 Выберите сервис для поиска:",
-        reply_markup=keyboard
-    )
+    await update.message.reply_text("Выберите сервис для поиска:", reply_markup=keyboard)
 
 async def nova_poshta_start(update, context):
-    """Кнопка-ссылка на отслеживание Новой Почты."""
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🌐 Перейти на сайт Новой Почты", url="https://tracking.novaposhta.ua/")],
     ])
-    await update.message.reply_text(
-        "🚚 *Новая Почта*\n"
-        "Для отслеживания посылки перейдите по ссылке и введите номер ТТН.",
-        parse_mode="Markdown",
-        reply_markup=keyboard
-    )
+    await update.message.reply_text("🚚 Новая Почта:", reply_markup=keyboard)
 
-# --- Обработка главного меню ---
-async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_main_menu(update, context):
     text = update.message.text
     if text == "📋 Клиенты":
         await clients_start(update, context)
@@ -207,20 +326,23 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "🆘 Помощь":
         await help_command(update, context)
     elif text == "🔙 Назад":
+        if context.user_data:
+            context.user_data.clear()
         await update.message.reply_text("Главное меню:", reply_markup=main_keyboard())
+    elif text == "❌ Отмена":
+        context.user_data.clear()
+        await update.message.reply_text("Действие отменено.", reply_markup=main_keyboard())
+        return ConversationHandler.END
     else:
-        # Если пришла кнопка из агрегатного подменю – обработаем отдельно
         await old_functions(update, context)
 
-# --- Перенаправление старых кнопок (когда находимся в подменю агрегатов) ---
-async def old_functions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def old_functions(update, context):
     text = update.message.text
     if text == "📋 Все товары":
         await show_all_products(update, context)
     elif text == "✏️ Изменить статус":
         await change_status_start(update, context)
     elif text == "➕ Добавить товар":
-        # Запустить старый диалог добавления
         await update.message.reply_text(
             "Выберите тип товара:",
             reply_markup=ReplyKeyboardMarkup([["Генератор", "Стартер"]], one_time_keyboard=True, resize_keyboard=True)
@@ -228,22 +350,15 @@ async def old_functions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return TYPE
     elif text == "🔍 Поиск по модели":
         await update.message.reply_text("Введите модель для поиска:")
-        return 0  # состояние поиска
-       elif text == "🔙 Назад":
-        # Если был незавершённый диалог, отменяем его
+        return 0
+    elif text == "🔙 Назад":
         if context.user_data:
             context.user_data.clear()
         await update.message.reply_text("Главное меню:", reply_markup=main_keyboard())
-
-    elif text == "❌ Отмена":
-        # Отменяем всё и сбрасываем состояние
-        context.user_data.clear()
-        await update.message.reply_text("Действие отменено.", reply_markup=main_keyboard())
-        return ConversationHandler.END
     else:
         await update.message.reply_text("Используйте кнопки меню.")
 
-# ---------- СТАРЫЕ ФУНКЦИИ (с заменой рублей на гривны) ----------
+# ---------- СТАРЫЕ ФУНКЦИИ (с гривнами) ----------
 async def show_all_products(update, context):
     rows = get_all_rows()
     if not rows:
@@ -251,7 +366,7 @@ async def show_all_products(update, context):
         return
     keyboard = []
     for row in rows[:10]:
-        label = f"{row['Модель']} ({row['Статус']}) - {row['Цена']}₴"  # <-- гривна
+        label = f"{row['Модель']} ({row['Статус']}) - {row['Цена']}₴"  # <-- ГРИВНА
         keyboard.append([InlineKeyboardButton(label, callback_data=f"detail_{row['_row']}")])
     reply = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("📋 Все товары:", reply_markup=reply)
@@ -261,7 +376,7 @@ async def product_detail(update, context):
     await query.answer()
     data = query.data
     if data == "show_more":
-        await query.edit_message_text("Функция листания пока не реализована.")
+        await query.edit_message_text("Функция листания не реализована.")
         return
     row_num = int(data.split("_")[1])
     try:
@@ -430,20 +545,17 @@ async def search_model_input(update, context):
     await update.message.reply_text("🔍 Результаты поиска:", reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
 
-# ---------- HTTP СЕРВЕР ДЛЯ RENDER ----------
+# ---------- ЗАПУСК ----------
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Запуск HTTP-сервера (чтобы Render не убивал сервис и для будущих отчётов)
+    # HTTP-сервер для веб-интерфейса
     port = int(os.environ.get("PORT", 8000))
-    web_dir = os.path.join(os.path.dirname(__file__), "templates")
-    os.chdir(web_dir)
-    def run_http_server():
-        HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler).serve_forever()
-    threading.Thread(target=run_http_server, daemon=True).start()
-    logger.info(f"HTTP сервер запущен на порту {port}")
+    httpd = HTTPServer(("0.0.0.0", port), CRMHTTPHandler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    logger.info(f"Веб-интерфейс запущен на порту {port}")
 
-    # --- ConversationHandler для добавления товара ---
+    # ConversationHandler для добавления товара
     add_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^➕ Добавить товар$"), add_product_start)],
         states={
@@ -484,7 +596,6 @@ def main():
     # Текстовые сообщения (кнопки меню)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu))
 
-    # Запуск бота
     logger.info("Бот запущен...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
