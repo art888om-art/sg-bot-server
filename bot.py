@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 CRM-бот для продавцов генераторов и стартеров.
-Версия 3.0 – веб-интерфейс клиентов + гривны + старые функции.
+Версия 4.0 – личный кабинет, аналитика, база агрегатов, вход по Telegram ID.
+Все HTML-страницы встроены, дополнительные файлы не нужны.
 """
 import os, logging, threading, json
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -23,6 +24,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_URL = os.getenv("GOOGLE_SHEET_URL")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(","))) if os.getenv("ADMIN_IDS") else []
 NOVA_POSHTA_API_KEY = os.getenv("NOVA_POSHTA_API_KEY", "")
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://ваш-домен.onrender.com")  # замените при необходимости
 
 # Логирование
 logging.basicConfig(
@@ -34,22 +36,20 @@ logger = logging.getLogger(__name__)
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("google_key.json", scope)
 client = gspread.authorize(creds)
+sheet = client.open_by_url(SHEET_URL).sheet1  # основной лист с товарами
 
-# Основной лист с товарами (старый)
-sheet = client.open_by_url(SHEET_URL).sheet1
-
-# ---------- НОВЫЕ ЛИСТЫ (создаются автоматически) ----------
+# ---------- НОВЫЕ ЛИСТЫ (автосоздание) ----------
 SHEET_STRUCTURE = {
     "Клиенты":   ["ID", "Имя", "Телефон", "Авто", "VIN", "Агрегат", "Тип", "Состояние", "Цена", "Комментарий", "Статус", "История"],
     "Агрегаты":  ["ID", "Тип", "Модель", "Аналог", "Характеристики", "Наличие", "Цена", "Гарантия"],
-    "Сделки":    ["ID", "Клиент_ID", "Товар_ID", "Сумма", "Статус", "Дата"],
-    "Звонки":    ["ID", "Менеджер", "Клиент_ID", "Результат", "Дата"],
+    "Сделки":    ["ID", "Клиент_ID", "Товар_ID", "Сумма", "Статус", "Дата", "Менеджер_ID"],
+    "Звонки":    ["ID", "Менеджер_ID", "Клиент_ID", "Результат", "Дата"],
     "Скрипты":   ["Возражение", "Ответ"],
-    "Статистика":["Дата", "Продажи_кол", "Сумма", "Звонки_кол", "Конверсия"]
+    "Статистика":["Дата", "Продажи_кол", "Сумма", "Звонки_кол", "Конверсия"],
+    "Менеджеры": ["Telegram_ID", "Имя", "Пароль"]
 }
 
 def init_sheets():
-    """Создаёт новые листы с заголовками, если их ещё нет."""
     try:
         all_worksheets = client.open_by_url(SHEET_URL).worksheets()
         existing_titles = [ws.title for ws in all_worksheets]
@@ -63,7 +63,7 @@ def init_sheets():
 
 init_sheets()
 
-# ---------- КНОПКИ ----------
+# ---------- КНОПКИ (Telegram) ----------
 STATUSES = ["в наличии", "продан", "в ремонте"]
 (TYPE, MODEL, PRICE, STATUS, DESCRIPTION, PHOTO) = range(6)
 
@@ -72,7 +72,8 @@ def main_keyboard():
         [KeyboardButton("📋 Клиенты"), KeyboardButton("🗄️ Агрегаты")],
         [KeyboardButton("📜 Скрипты"), KeyboardButton("📊 Аналитика")],
         [KeyboardButton("📈 Отчёт"), KeyboardButton("🔗 Поиск VIN/Агрегатов")],
-        [KeyboardButton("🚚 Новая Почта"), KeyboardButton("🆘 Помощь")]
+        [KeyboardButton("🚚 Новая Почта"), KeyboardButton("🆘 Помощь")],
+        [KeyboardButton("📱 Приложение")]
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
@@ -100,44 +101,141 @@ async def check_admin(user_id: int) -> bool:
 # ---------- ВЕБ-ИНТЕРФЕЙС (HTTP-сервер) ----------
 class CRMHTTPHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/":
-            self.send_response(200)
-            self.send_header("Content-type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(HTML_PAGE.encode("utf-8"))
-        elif self.path == "/api/clients":
-            self.send_response(200)
-            self.send_header("Content-type", "application/json; charset=utf-8")
-            self.end_headers()
-            clients = get_clients_data()
-            self.wfile.write(json.dumps(clients, ensure_ascii=False).encode("utf-8"))
+        path = self.path.split("?")[0]
+        if path == "/":
+            self._send_html(LOGIN_PAGE)
+        elif path == "/clients":
+            self._send_html(CLIENTS_PAGE)
+        elif path == "/aggregates":
+            self._send_html(AGGREGATES_PAGE)
+        elif path == "/dashboard":
+            self._send_html(DASHBOARD_PAGE)
+        elif path == "/api/clients":
+            self._api_get_clients()
+        elif path == "/api/aggregates":
+            self._api_get_aggregates()
+        elif path == "/api/analytics":
+            self._api_get_analytics()
+        elif path == "/api/report":
+            self._api_get_report()
         else:
-            self.send_response(404)
-            self.end_headers()
+            self.send_error(404)
 
     def do_POST(self):
-        if self.path == "/api/add_client":
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length)
-            data = json.loads(body.decode("utf-8"))
-            success = add_client_to_sheet(data)
-            self.send_response(200 if success else 500)
-            self.send_header("Content-type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(json.dumps({"ok": success}, ensure_ascii=False).encode("utf-8"))
+        path = self.path.split("?")[0]
+        if path == "/api/login":
+            self._api_login()
+        elif path == "/api/add_client":
+            self._api_add_client()
+        elif path == "/api/add_aggregate":
+            self._api_add_aggregate()
         else:
-            self.send_response(404)
-            self.end_headers()
+            self.send_error(404)
 
+    def _send_html(self, content):
+        self.send_response(200)
+        self.send_header("Content-type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(content.encode("utf-8"))
+
+    def _get_cookie(self, name):
+        cookies = self.headers.get("Cookie", "")
+        for c in cookies.split(";"):
+            c = c.strip()
+            if c.startswith(f"{name}="):
+                return c[len(f"{name}="):]
+        return None
+
+    def _check_auth(self):
+        token = self._get_cookie("auth_token")
+        if not token:
+            return None
+        try:
+            managers_ws = client.open_by_url(SHEET_URL).worksheet("Менеджеры")
+            records = managers_ws.get_all_records()
+            for r in records:
+                if str(r["Telegram_ID"]) == token:
+                    return token
+            return None
+        except:
+            return None
+
+    def _get_json_body(self):
+        length = int(self.headers.get("Content-Length", 0))
+        return json.loads(self.rfile.read(length).decode("utf-8"))
+
+    def _send_json(self, data, status=200):
+        self.send_response(status)
+        self.send_header("Content-type", "application/json; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+
+    # API методы
+    def _api_login(self):
+        data = self._get_json_body()
+        tg_id = str(data.get("tg_id", ""))
+        password = data.get("password", "")
+        try:
+            managers_ws = client.open_by_url(SHEET_URL).worksheet("Менеджеры")
+            records = managers_ws.get_all_records()
+            for r in records:
+                if str(r["Telegram_ID"]) == tg_id and r["Пароль"] == password:
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.send_header("Set-Cookie", f"auth_token={tg_id}; Path=/")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"ok": True, "name": r["Имя"]}).encode())
+                    return
+            self._send_json({"ok": False, "error": "Неверный ID или пароль"}, 401)
+        except Exception as e:
+            logger.error(f"Login error: {e}")
+            self.send_error(500)
+
+    def _api_get_clients(self):
+        if not self._check_auth():
+            self.send_error(403); return
+        data = get_clients_data()
+        self._send_json(data)
+
+    def _api_get_aggregates(self):
+        if not self._check_auth():
+            self.send_error(403); return
+        data = get_aggregates_data()
+        self._send_json(data)
+
+    def _api_get_analytics(self):
+        tg_id = self._check_auth()
+        if not tg_id:
+            self.send_error(403); return
+        self._send_json(get_analytics(tg_id))
+
+    def _api_get_report(self):
+        tg_id = self._check_auth()
+        if not tg_id:
+            self.send_error(403); return
+        self._send_json(get_manager_report(tg_id))
+
+    def _api_add_client(self):
+        if not self._check_auth():
+            self.send_error(403); return
+        data = self._get_json_body()
+        ok = add_client_to_sheet(data)
+        self._send_json({"ok": ok})
+
+    def _api_add_aggregate(self):
+        if not self._check_auth():
+            self.send_error(403); return
+        data = self._get_json_body()
+        ok = add_aggregate_to_sheet(data)
+        self._send_json({"ok": ok})
+
+# ---------- Функции работы с Google Sheets ----------
 def get_clients_data():
     try:
         ws = client.open_by_url(SHEET_URL).worksheet("Клиенты")
-        records = ws.get_all_records()
-        for r in records:
-            r.pop("_row", None)
-        return records
+        return ws.get_all_records()
     except Exception as e:
-        logger.error(f"Ошибка чтения клиентов: {e}")
+        logger.error(f"Clients error: {e}")
         return []
 
 def add_client_to_sheet(data):
@@ -145,71 +243,154 @@ def add_client_to_sheet(data):
         ws = client.open_by_url(SHEET_URL).worksheet("Клиенты")
         records = ws.get_all_records()
         new_id = max([int(r["ID"]) for r in records if str(r.get("ID", "0")).isdigit()] + [0]) + 1
-        row = [
-            str(new_id),
-            data.get("name", ""),
-            data.get("phone", ""),
-            data.get("auto", ""),
-            data.get("vin", ""),
-            data.get("unit", ""),
-            data.get("unit_type", ""),
-            data.get("condition", ""),
-            data.get("price", ""),
-            data.get("comment", ""),
-            data.get("status", ""),
-            data.get("history", "")
-        ]
+        row = [str(new_id), data.get("name",""), data.get("phone",""), data.get("auto",""),
+               data.get("vin",""), data.get("unit",""), data.get("unit_type",""),
+               data.get("condition",""), data.get("price",""), data.get("comment",""),
+               data.get("status",""), data.get("history","")]
         ws.append_row(row)
         return True
     except Exception as e:
-        logger.error(f"Ошибка добавления клиента: {e}")
+        logger.error(f"Add client error: {e}")
         return False
 
-HTML_PAGE = r"""
+def get_aggregates_data():
+    try:
+        ws = client.open_by_url(SHEET_URL).worksheet("Агрегаты")
+        return ws.get_all_records()
+    except:
+        return []
+
+def add_aggregate_to_sheet(data):
+    try:
+        ws = client.open_by_url(SHEET_URL).worksheet("Агрегаты")
+        records = ws.get_all_records()
+        new_id = max([int(r["ID"]) for r in records if str(r.get("ID", "0")).isdigit()] + [0]) + 1
+        row = [str(new_id), data.get("type",""), data.get("model",""), data.get("analog",""),
+               data.get("features",""), data.get("availability",""), data.get("price",""),
+               data.get("warranty","")]
+        ws.append_row(row)
+        return True
+    except:
+        return False
+
+def get_analytics(tg_id):
+    try:
+        deals_ws = client.open_by_url(SHEET_URL).worksheet("Сделки")
+        calls_ws = client.open_by_url(SHEET_URL).worksheet("Звонки")
+        deals = deals_ws.get_all_records()
+        calls = calls_ws.get_all_records()
+        my_deals = [d for d in deals if str(d.get("Менеджер_ID","")) == tg_id]
+        my_calls = [c for c in calls if str(c.get("Менеджер_ID","")) == tg_id]
+        total_sales = sum(float(d.get("Сумма",0)) for d in my_deals)
+        total_deals = len(my_deals)
+        return {
+            "total_sales": total_sales,
+            "total_deals": total_deals,
+            "total_calls": len(my_calls),
+            "conversion": round(total_deals / len(my_calls) * 100, 1) if my_calls else 0
+        }
+    except Exception as e:
+        logger.error(f"Analytics error: {e}")
+        return {"total_sales":0, "total_deals":0, "total_calls":0, "conversion":0}
+
+def get_manager_report(tg_id):
+    return get_analytics(tg_id)  # для простоты возвращаем ту же аналитику
+
+# ---------- ВСТРОЕННЫЕ HTML-СТРАНИЦЫ ----------
+LOGIN_PAGE = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CRM Генераторы и Стартеры</title>
+  <title>Вход в CRM</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light d-flex justify-content-center align-items-center vh-100">
+<div class="card p-4 shadow" style="width: 320px;">
+  <h4 class="mb-3">🔐 Вход в CRM</h4>
+  <input class="form-control mb-2" placeholder="Telegram ID" id="tg_id">
+  <input class="form-control mb-2" type="password" placeholder="Пароль" id="password">
+  <button class="btn btn-primary w-100" onclick="login()">Войти</button>
+  <div id="error" class="text-danger mt-2" style="display:none;"></div>
+</div>
+<script>
+  async function login() {
+    const tg_id = document.getElementById('tg_id').value;
+    const password = document.getElementById('password').value;
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({tg_id, password})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      window.location.href = '/dashboard';
+    } else {
+      document.getElementById('error').textContent = data.error || 'Ошибка';
+      document.getElementById('error').style.display = 'block';
+    }
+  }
+</script>
+</body>
+</html>
+"""
+
+CLIENTS_PAGE = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Клиенты</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body class="bg-light">
-<div class="container py-4">
-  <h1 class="mb-4">📋 Клиенты</h1>
-  <button class="btn btn-success mb-3" onclick="document.getElementById('addForm').classList.toggle('d-none')">
-    ➕ Добавить клиента
-  </button>
-  <div id="addForm" class="card p-3 mb-4 d-none">
-    <h5>Новый клиент</h5>
+<nav class="navbar navbar-expand navbar-dark bg-dark mb-3">
+  <div class="container">
+    <a class="navbar-brand" href="#">CRM</a>
+    <div class="navbar-nav">
+      <a class="nav-link" href="/dashboard">Аналитика</a>
+      <a class="nav-link active" href="/clients">Клиенты</a>
+      <a class="nav-link" href="/aggregates">Агрегаты</a>
+    </div>
+  </div>
+</nav>
+<div class="container">
+  <h2>📋 Клиенты</h2>
+  <button class="btn btn-success mb-3" onclick="toggleForm()">➕ Добавить клиента</button>
+  <div id="addForm" class="card p-3 mb-3 d-none">
+    <!-- поля формы, аналогично предыдущей версии -->
     <div class="row g-2">
       <div class="col-md-4"><input class="form-control" placeholder="Имя" id="name"></div>
       <div class="col-md-4"><input class="form-control" placeholder="Телефон" id="phone"></div>
-      <div class="col-md-4"><input class="form-control" placeholder="Автомобиль" id="auto"></div>
-      <div class="col-md-4"><input class="form-control" placeholder="VIN-код" id="vin"></div>
-      <div class="col-md-4"><input class="form-control" placeholder="Агрегат (стартер/генератор)" id="unit"></div>
+      <div class="col-md-4"><input class="form-control" placeholder="Авто" id="auto"></div>
+      <div class="col-md-4"><input class="form-control" placeholder="VIN" id="vin"></div>
+      <div class="col-md-4"><input class="form-control" placeholder="Агрегат" id="unit"></div>
       <div class="col-md-2"><select class="form-select" id="unit_type"><option>Стартер</option><option>Генератор</option></select></div>
       <div class="col-md-2"><select class="form-select" id="condition"><option>Новый</option><option>Восстановленный</option><option>Б/У</option></select></div>
       <div class="col-md-2"><input class="form-control" placeholder="Цена" id="price"></div>
       <div class="col-md-6"><input class="form-control" placeholder="Комментарий" id="comment"></div>
       <div class="col-md-3"><select class="form-select" id="status"><option>Новый</option><option>В обработке</option><option>Закрыт</option></select></div>
-      <div class="col-md-12 mt-2">
+      <div class="col-12 mt-2">
         <button class="btn btn-primary" onclick="addClient()">Сохранить</button>
-        <button class="btn btn-secondary" onclick="document.getElementById('addForm').classList.add('d-none')">Отмена</button>
+        <button class="btn btn-secondary" onclick="toggleForm()">Отмена</button>
       </div>
     </div>
   </div>
-  <table class="table table-bordered table-hover bg-white">
+  <table class="table table-bordered bg-white">
     <thead><tr><th>Имя</th><th>Телефон</th><th>Авто</th><th>VIN</th><th>Агрегат</th><th>Тип</th><th>Состояние</th><th>Цена</th><th>Статус</th><th>Комментарий</th></tr></thead>
     <tbody id="clients-body"></tbody>
   </table>
 </div>
 <script>
+  function toggleForm() { document.getElementById('addForm').classList.toggle('d-none'); }
   async function loadClients() {
     const res = await fetch('/api/clients');
-    const clients = await res.json();
+    if (res.status === 403) { window.location.href = '/'; return; }
+    const data = await res.json();
     const tbody = document.getElementById('clients-body');
-    tbody.innerHTML = clients.map(c => `<tr>
+    tbody.innerHTML = data.map(c => `<tr>
       <td>${c.Имя||''}</td><td>${c.Телефон||''}</td><td>${c.Авто||''}</td><td>${c.VIN||''}</td>
       <td>${c.Агрегат||''}</td><td>${c.Тип||''}</td><td>${c.Состояние||''}</td><td>${c.Цена||''}</td>
       <td>${c.Статус||''}</td><td>${c.Комментарий||''}</td>
@@ -234,7 +415,7 @@ HTML_PAGE = r"""
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(data)
     });
-    document.getElementById('addForm').classList.add('d-none');
+    toggleForm();
     loadClients();
   }
   loadClients();
@@ -243,7 +424,131 @@ HTML_PAGE = r"""
 </html>
 """
 
-# ---------- ОБРАБОТЧИКИ TELEGRAM (старые) ----------
+AGGREGATES_PAGE = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Агрегаты</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<nav class="navbar navbar-expand navbar-dark bg-dark mb-3">
+  <div class="container">
+    <a class="navbar-brand" href="#">CRM</a>
+    <div class="navbar-nav">
+      <a class="nav-link" href="/dashboard">Аналитика</a>
+      <a class="nav-link" href="/clients">Клиенты</a>
+      <a class="nav-link active" href="/aggregates">Агрегаты</a>
+    </div>
+  </div>
+</nav>
+<div class="container">
+  <h2>🗄️ Агрегаты</h2>
+  <button class="btn btn-success mb-3" onclick="toggleForm()">➕ Добавить агрегат</button>
+  <div id="addForm" class="card p-3 mb-3 d-none">
+    <div class="row g-2">
+      <div class="col-md-3"><select class="form-select" id="type"><option>Стартер</option><option>Генератор</option></select></div>
+      <div class="col-md-3"><input class="form-control" placeholder="Модель" id="model"></div>
+      <div class="col-md-3"><input class="form-control" placeholder="Аналог" id="analog"></div>
+      <div class="col-md-3"><input class="form-control" placeholder="Характеристики" id="features"></div>
+      <div class="col-md-3"><input class="form-control" placeholder="Наличие" id="availability"></div>
+      <div class="col-md-2"><input class="form-control" placeholder="Цена" id="price"></div>
+      <div class="col-md-2"><input class="form-control" placeholder="Гарантия" id="warranty"></div>
+      <div class="col-12 mt-2">
+        <button class="btn btn-primary" onclick="addAggregate()">Сохранить</button>
+        <button class="btn btn-secondary" onclick="toggleForm()">Отмена</button>
+      </div>
+    </div>
+  </div>
+  <table class="table table-bordered bg-white">
+    <thead><tr><th>Тип</th><th>Модель</th><th>Аналог</th><th>Характеристики</th><th>Наличие</th><th>Цена</th><th>Гарантия</th></tr></thead>
+    <tbody id="agg-body"></tbody>
+  </table>
+</div>
+<script>
+  function toggleForm() { document.getElementById('addForm').classList.toggle('d-none'); }
+  async function loadAggregates() {
+    const res = await fetch('/api/aggregates');
+    if (res.status === 403) { window.location.href = '/'; return; }
+    const data = await res.json();
+    const tbody = document.getElementById('agg-body');
+    tbody.innerHTML = data.map(a => `<tr>
+      <td>${a.Тип||''}</td><td>${a.Модель||''}</td><td>${a.Аналог||''}</td>
+      <td>${a.Характеристики||''}</td><td>${a.Наличие||''}</td><td>${a.Цена||''}</td><td>${a.Гарантия||''}</td>
+    </tr>`).join('');
+  }
+  async function addAggregate() {
+    const data = {
+      type: document.getElementById('type').value,
+      model: document.getElementById('model').value,
+      analog: document.getElementById('analog').value,
+      features: document.getElementById('features').value,
+      availability: document.getElementById('availability').value,
+      price: document.getElementById('price').value,
+      warranty: document.getElementById('warranty').value
+    };
+    await fetch('/api/add_aggregate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    toggleForm();
+    loadAggregates();
+  }
+  loadAggregates();
+</script>
+</body>
+</html>
+"""
+
+DASHBOARD_PAGE = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Аналитика и отчёт</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<nav class="navbar navbar-expand navbar-dark bg-dark mb-3">
+  <div class="container">
+    <a class="navbar-brand" href="#">CRM</a>
+    <div class="navbar-nav">
+      <a class="nav-link active" href="/dashboard">Аналитика</a>
+      <a class="nav-link" href="/clients">Клиенты</a>
+      <a class="nav-link" href="/aggregates">Агрегаты</a>
+    </div>
+  </div>
+</nav>
+<div class="container">
+  <h2>📊 Моя аналитика</h2>
+  <div class="row" id="stats">
+    <div class="col-md-3"><div class="card p-3"><h6>Продажи</h6><h4 id="total_sales">0</h4></div></div>
+    <div class="col-md-3"><div class="card p-3"><h6>Сделок</h6><h4 id="total_deals">0</h4></div></div>
+    <div class="col-md-3"><div class="card p-3"><h6>Звонков</h6><h4 id="total_calls">0</h4></div></div>
+    <div class="col-md-3"><div class="card p-3"><h6>Конверсия</h6><h4 id="conversion">0%</h4></div></div>
+  </div>
+</div>
+<script>
+  async function loadAnalytics() {
+    const res = await fetch('/api/analytics');
+    if (res.status === 403) { window.location.href = '/'; return; }
+    const data = await res.json();
+    document.getElementById('total_sales').textContent = data.total_sales + '₴';
+    document.getElementById('total_deals').textContent = data.total_deals;
+    document.getElementById('total_calls').textContent = data.total_calls;
+    document.getElementById('conversion').textContent = data.conversion + '%';
+  }
+  loadAnalytics();
+</script>
+</body>
+</html>
+"""
+
+# ---------- ОБРАБОТЧИКИ TELEGRAM (старые функции) ----------
 async def start(update, context):
     await update.message.reply_text(
         "👋 Добро пожаловать в CRM!\nИспользуйте кнопки.",
@@ -252,22 +557,27 @@ async def start(update, context):
 
 async def help_command(update, context):
     await update.message.reply_text(
-        "📌 CRM бот\n\n"
+        "📌 *CRM бот*\n\n"
         "📋 Клиенты — карточки клиентов\n"
         "🗄️ Агрегаты — база товаров\n"
         "📜 Скрипты — ответы на возражения\n"
         "📊 Аналитика — статистика\n"
         "📈 Отчёт — ежедневный отчёт\n"
         "🔗 Поиск VIN/Агрегатов — Avto.pro, Exist.ua\n"
-        "🚚 Новая Почта — трекинг\n"
+        "🚚 Новая Почта — трекинг и срок доставки\n"
+        "📱 Приложение — открыть веб-интерфейс\n"
         "🆘 Помощь — это сообщение",
+        parse_mode="Markdown",
         reply_markup=main_keyboard()
     )
 
 async def clients_start(update, context):
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Открыть CRM", web_app=WebAppInfo(url=RENDER_URL))]
+    ])
     await update.message.reply_text(
-        "📋 Раздел «Клиенты» откройте в браузере: " + os.getenv("RENDER_EXTERNAL_URL", ""),
-        reply_markup=main_keyboard()
+        "📋 Нажмите кнопку, чтобы открыть базу клиентов в приложении.",
+        reply_markup=keyboard
     )
 
 async def agregat_start(update, context):
@@ -289,23 +599,36 @@ async def scripts_start(update, context):
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_keyboard())
 
 async def analytics_start(update, context):
-    await update.message.reply_text("📊 Аналитика появится позже.", reply_markup=main_keyboard())
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Открыть аналитику", web_app=WebAppInfo(url=RENDER_URL + "/dashboard"))]
+    ])
+    await update.message.reply_text("📊 Нажмите, чтобы посмотреть аналитику.", reply_markup=keyboard)
 
 async def report_start(update, context):
-    await update.message.reply_text("📈 Ежедневный отчёт (скоро).", reply_markup=main_keyboard())
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Открыть отчёт", web_app=WebAppInfo(url=RENDER_URL + "/dashboard"))]
+    ])
+    await update.message.reply_text("📈 Ваш персональный отчёт доступен в личном кабинете.", reply_markup=keyboard)
 
 async def search_start(update, context):
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚗 Avto.pro (подбор агрегатов)", url="https://avto.pro/catalog/")],
-        [InlineKeyboardButton("🔎 Exist.ua (пробив по VIN)", url="https://exist.ua/")],
+        [InlineKeyboardButton("🚗 Поиск агрегатов (Avto.pro)", url="https://avto.pro/")],
+        [InlineKeyboardButton("🔎 Поиск по VIN (Exist.ua)", url="https://exist.ua/")],
     ])
-    await update.message.reply_text("Выберите сервис для поиска:", reply_markup=keyboard)
+    await update.message.reply_text("🔗 Выберите сервис:", reply_markup=keyboard)
 
 async def nova_poshta_start(update, context):
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌐 Перейти на сайт Новой Почты", url="https://tracking.novaposhta.ua/")],
+        [InlineKeyboardButton("📦 Трекинг посылок", url="https://tracking.novaposhta.ua/#/uk")],
+        [InlineKeyboardButton("⏱ Срок доставки", url="https://forms.novapost.world/delivery_time/#/?source=site&locale=uk")],
     ])
-    await update.message.reply_text("🚚 Новая Почта:", reply_markup=keyboard)
+    await update.message.reply_text("🚚 Новая Почта – выберите действие:", reply_markup=keyboard)
+
+async def open_webapp(update, context):
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Открыть приложение", web_app=WebAppInfo(url=RENDER_URL))]
+    ])
+    await update.message.reply_text("Нажмите, чтобы открыть CRM как приложение.", reply_markup=keyboard)
 
 async def handle_main_menu(update, context):
     text = update.message.text
@@ -325,6 +648,8 @@ async def handle_main_menu(update, context):
         await nova_poshta_start(update, context)
     elif text == "🆘 Помощь":
         await help_command(update, context)
+    elif text == "📱 Приложение":
+        await open_webapp(update, context)
     elif text == "🔙 Назад":
         if context.user_data:
             context.user_data.clear()
@@ -366,10 +691,9 @@ async def show_all_products(update, context):
         return
     keyboard = []
     for row in rows[:10]:
-        label = f"{row['Модель']} ({row['Статус']}) - {row['Цена']}₴"  # <-- ГРИВНА
+        label = f"{row['Модель']} ({row['Статус']}) - {row['Цена']}₴"
         keyboard.append([InlineKeyboardButton(label, callback_data=f"detail_{row['_row']}")])
-    reply = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("📋 Все товары:", reply_markup=reply)
+    await update.message.reply_text("📋 Все товары:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def product_detail(update, context):
     query = update.callback_query
@@ -392,12 +716,7 @@ async def product_detail(update, context):
             f"Описание: {desc}"
         )
         if photo_id:
-            await context.bot.send_photo(
-                chat_id=query.message.chat_id,
-                photo=photo_id,
-                caption=text,
-                parse_mode="Markdown"
-            )
+            await context.bot.send_photo(chat_id=query.message.chat_id, photo=photo_id, caption=text, parse_mode="Markdown")
         else:
             await query.edit_message_text(text, parse_mode="Markdown")
     except Exception as e:
@@ -474,10 +793,8 @@ async def add_photo(update, context):
     all_rows = get_all_rows()
     new_id = max([int(r["ID"]) for r in all_rows if r["ID"].isdigit()] + [0]) + 1
     try:
-        sheet.append_row([
-            str(new_id), data["type"], data["model"], str(data["price"]),
-            data["status"], data["description"], photo_id
-        ])
+        sheet.append_row([str(new_id), data["type"], data["model"], str(data["price"]),
+                          data["status"], data["description"], photo_id])
         await update.message.reply_text(
             f"✅ Товар *{data['model']}* добавлен! (ID {new_id})",
             parse_mode="Markdown", reply_markup=agregat_menu()
@@ -564,36 +881,23 @@ def main():
             PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_price)],
             STATUS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_status)],
             DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_description)],
-            PHOTO: [
-                MessageHandler(filters.PHOTO, add_photo),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, add_photo),
-            ],
+            PHOTO: [MessageHandler(filters.PHOTO, add_photo), MessageHandler(filters.TEXT & ~filters.COMMAND, add_photo)],
         },
         fallbacks=[CommandHandler("cancel", cancel_add)],
     )
-
-    # ConversationHandler для поиска
     search_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🔍 Поиск по модели$"), lambda u, c: search_model_input(u, c))],
-        states={
-            0: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_model_input)],
-        },
+        states={0: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_model_input)]},
         fallbacks=[],
     )
 
     app.add_handler(add_conv)
     app.add_handler(search_conv)
-
-    # Команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("export", lambda u, c: u.message.reply_text(SHEET_URL)))
-
-    # Callback-обработчики
     app.add_handler(CallbackQueryHandler(product_detail, pattern="^detail_"))
     app.add_handler(CallbackQueryHandler(status_select_product, pattern="^status_"))
     app.add_handler(CallbackQueryHandler(status_set_new, pattern="^setstatus_"))
-
-    # Текстовые сообщения (кнопки меню)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu))
 
     logger.info("Бот запущен...")
