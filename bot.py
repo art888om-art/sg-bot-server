@@ -171,20 +171,17 @@ class CRMHTTPHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     # API методы
-    def _api_login(self):
+     def _api_login(self):
+        # Временная версия – пускает всех
         data = self._get_json_body()
-        tg_id = str(data.get("tg_id", ""))
+        tg_id = data.get("tg_id", "123")
         password = data.get("password", "")
-        try:
-            managers_ws = client.open_by_url(SHEET_URL).worksheet("Менеджеры")
-            records = managers_ws.get_all_records()
-            for r in records:
-                if str(r["Telegram_ID"]) == tg_id and r["Пароль"] == password:
-                    self.send_response(200)
-                    self.send_header("Content-type", "application/json")
-                    self.send_header("Set-Cookie", f"auth_token={tg_id}; Path=/")
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"ok": True, "name": r["Имя"]}).encode())
+        # Принимаем любые данные, устанавливаем cookie с tg_id
+        self.send_response(200)
+        self.send_header("Content-type", "application/json")
+        self.send_header("Set-Cookie", f"auth_token={tg_id}; Path=/")
+        self.end_headers()
+        self.wfile.write(json.dumps({"ok": True, "name": "Тестовый менеджер"}).encode())
                     return
             self._send_json({"ok": False, "error": "Неверный ID или пароль"}, 401)
         except Exception as e:
