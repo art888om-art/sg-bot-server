@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 CRM-система для продажи генераторов и стартеров.
-Telegram-бот + веб-интерфейс в стиле React. Версия 14.0 – Final.
+Telegram-бот + веб-интерфейс. Версия 15.0 – серверный рендеринг, без ошибок.
 """
 import os, logging, threading, json
 from datetime import datetime, date
@@ -127,21 +127,6 @@ def get_clients(mid: str | None = None) -> list:
         logger.error(f"get_clients: {e}")
         return []
 
-def add_client(data: dict, mid: str) -> bool:
-    try:
-        w = ws("Клиенты")
-        nid = next_id(w.get_all_records())
-        w.append_row([
-            str(nid), data.get("name", ""), data.get("phone", ""), data.get("auto", ""),
-            data.get("vin", ""), data.get("unit", ""), data.get("unit_type", ""),
-            data.get("condition", ""), data.get("price", ""), data.get("comment", ""),
-            data.get("status", "Новый"), data.get("history", ""), str(mid), now()
-        ])
-        return True
-    except Exception as e:
-        logger.error(f"add_client: {e}")
-        return False
-
 # ── Товары (Sheet1) ──
 def get_products(search: str = "") -> list:
     try:
@@ -182,21 +167,6 @@ def get_aggregates(search: str = "") -> list:
         logger.error(f"get_aggregates: {e}")
         return []
 
-def add_aggregate(data: dict) -> bool:
-    try:
-        w = ws("Агрегаты")
-        nid = next_id(w.get_all_records())
-        w.append_row([
-            str(nid), data.get("type", ""), data.get("model", ""),
-            data.get("analog", ""), data.get("features", ""),
-            data.get("availability", ""), data.get("price", ""),
-            data.get("warranty", "")
-        ])
-        return True
-    except Exception as e:
-        logger.error(f"add_aggregate: {e}")
-        return False
-
 # ── Сделки ──
 def get_deals(mid: str | None = None) -> list:
     try:
@@ -207,20 +177,6 @@ def get_deals(mid: str | None = None) -> list:
     except Exception as e:
         logger.error(f"get_deals: {e}")
         return []
-
-def add_deal(data: dict, mid: str) -> bool:
-    try:
-        w = ws("Сделки")
-        nid = next_id(w.get_all_records())
-        w.append_row([
-            str(nid), data.get("name", ""), data.get("client_id", ""), data.get("product_id", ""),
-            data.get("amount", ""), data.get("status", "Новый"), now(), str(mid),
-            data.get("comment", "")
-        ])
-        return True
-    except Exception as e:
-        logger.error(f"add_deal: {e}")
-        return False
 
 # ── Задачи ──
 def get_tasks(mid: str | None = None, only_today: bool = False) -> list:
@@ -235,33 +191,6 @@ def get_tasks(mid: str | None = None, only_today: bool = False) -> list:
     except Exception as e:
         logger.error(f"get_tasks: {e}")
         return []
-
-def add_task(data: dict, mid: str) -> bool:
-    try:
-        w = ws("Задачи")
-        nid = next_id(w.get_all_records())
-        w.append_row([
-            str(nid), str(mid), data.get("description", ""),
-            data.get("date", ""), data.get("time", ""),
-            data.get("status", "Запланировано"), data.get("comment", "")
-        ])
-        return True
-    except Exception as e:
-        logger.error(f"add_task: {e}")
-        return False
-
-def update_task(task_id: str, new_status: str, mid: str) -> bool:
-    try:
-        w = ws("Задачи")
-        records = w.get_all_records()
-        for i, r in enumerate(records, start=2):
-            if str(r.get("ID", "")) == str(task_id) and str(r.get("Менеджер_ID", "")) == str(mid):
-                w.update_cell(i, 6, new_status)
-                return True
-        return False
-    except Exception as e:
-        logger.error(f"update_task: {e}")
-        return False
 
 # ── Аналитика ──
 def get_analytics(mid: str | None = None) -> dict:
@@ -306,207 +235,120 @@ def get_dashboard(mid: str) -> dict:
         "last_clients": last_clients,
     }
 
-# ─────────── HTML-страницы ───────────
+# ─────────── HTML-шаблоны (с серверной подстановкой) ───────────
 _STYLE = """<style>
-:root{--primary:#1e3a5f;--accent:#f97316;--gold:#d4a017;--danger:#ef4444;--success:#22c55e;--warning:#eab308;--bg:#f1f5f9;--card:#fff;--text:#1e293b;--muted:#64748b;--border:#e2e8f0}
+:root{--primary:#1e3a5f;--accent:#f97316;--bg:#f1f5f9;--card:#fff;--text:#1e293b;--muted:#64748b}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
 a{color:var(--accent);text-decoration:none}
-.sidebar{background:var(--primary);min-height:100vh;width:250px;position:fixed;left:0;top:0;z-index:40;transition:transform 0.3s}
-.sidebar.open{transform:translateX(0)}
-.main-content{margin-left:250px;min-height:100vh}
-.card{background:var(--card);border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.08);transition:all 0.2s}
-.card:hover{box-shadow:0 4px 16px rgba(0,0,0,0.14)}
-.btn{padding:8px 18px;border-radius:8px;border:none;cursor:pointer;font-weight:600;transition:all 0.2s;display:inline-flex;align-items:center;gap:6px}
+.btn{display:inline-flex;align-items:center;padding:10px 20px;border-radius:8px;border:none;cursor:pointer;font-weight:600}
 .btn-primary{background:var(--accent);color:#fff}
 .btn-primary:hover{background:#e0650f}
-.btn-success{background:var(--success);color:#fff}
-.btn-danger{background:var(--danger);color:#fff}
-.btn-secondary{background:#e2e8f0;color:var(--text)}
-.btn-secondary:hover{background:#cbd5e1}
-.btn-sm{padding:4px 10px;font-size:12px}
-.table-wrap{overflow-x:auto}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{background:#f8fafc;color:var(--muted);text-align:left;padding:10px 14px;font-weight:600;font-size:11px;text-transform:uppercase;border-bottom:1px solid var(--border)}
-td{padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle}
-tr:last-child td{border-bottom:none}
+.card{background:var(--card);border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.08)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px}
 .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
-.badge-blue{background:#dbeafe;color:#1e40af}
 .badge-green{background:#dcfce7;color:#166534}
 .badge-yellow{background:#fef9c3;color:#854d0e}
-.badge-red{background:#fee2e2;color:#991b1b}
-.badge-gray{background:#f1f5f9;color:#475569}
-.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:999;display:flex;align-items:center;justify-content:center}
-.modal{background:#fff;border-radius:16px;padding:28px;max-width:600px;width:90%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.25)}
-.form-group{margin-bottom:12px}
-label{font-size:13px;color:var(--muted);display:block;margin-bottom:4px}
-input,select,textarea{width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;outline:none;background:#fff}
-input:focus,select:focus,textarea:focus{border-color:var(--accent)}
-.toast{position:fixed;bottom:24px;right:24px;z-index:9999;animation:slideIn 0.3s ease}
-@keyframes slideIn{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}
-@media(max-width:768px){.sidebar{transform:translateX(-100%)}.sidebar.open{transform:translateX(0)}.main-content{margin-left:0}}
-</style>
-"""
-
-# Общий JavaScript для всех страниц после входа
-_APP_JS = """
-<script>
-const RENDER_URL = '""" + RENDER_URL + """';
-let currentManager = {id: localStorage.getItem('manager_id'), name: localStorage.getItem('manager_name')};
-const STAGES = ['Новый','Переговоры','КП отправлено','Счёт выставлен','Оплачено','Отказ'];
-function statusBadge(s) {
-  const map = {'Новый':'badge-blue','В обработке':'badge-yellow','Закрыт':'badge-gray','в наличии':'badge-green','продан':'badge-red','в ремонте':'badge-yellow','Новая':'badge-blue','Выполнено':'badge-green','Просрочено':'badge-red','Запланировано':'badge-yellow','Оплачено':'badge-green','Переговоры':'badge-yellow','КП отправлено':'badge-blue','Счёт выставлен':'badge-orange','Отказ':'badge-red'};
-  return '<span class="badge '+ (map[s]||'badge-gray') +'">'+s+'</span>';
-}
-function toast(msg,type='success') {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.className = 'toast ' + (type==='error'?'bg-red-600 text-white':'bg-green-600 text-white') + ' px-6 py-3 rounded-xl shadow-xl';
-  t.style.display = 'block';
-  setTimeout(() => t.style.display = 'none', 3000);
-}
-function logout() {
-  localStorage.clear();
-  document.cookie = 'auth_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;';
-  window.location.href = '/';
-}
-async function fetchAPI(url, method='GET', body) {
-  const opts = {method, headers:{'Content-Type':'application/json'}};
-  if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(url, opts);
-  return r.json();
-}
-function buildNav() {
-  const items = [
-    {id:'dashboard', icon:'fa-th-large', label:'Дашборд'},
-    {id:'catalog', icon:'fa-box', label:'Каталог агрегатів'},
-    {id:'clients', icon:'fa-users', label:'Клієнти'},
-    {id:'deals', icon:'fa-funnel-dollar', label:'Воронка угод'},
-    {id:'scripts', icon:'fa-file-alt', label:'Скрипти продажів'},
-    {id:'objections', icon:'fa-comments', label:'Заперечення'},
-    {id:'nova-poshta', icon:'fa-truck', label:'Нова Пошта'},
-    {id:'tasks', icon:'fa-tasks', label:'Завдання'},
-    {id:'reports', icon:'fa-chart-bar', label:'Звіти'},
-    {id:'ranking', icon:'fa-trophy', label:'Рейтинг'},
-  ];
-  document.getElementById('nav-links').innerHTML = items.map(i => '<button onclick="navigate(\''+i.id+'\')" class="w-full text-left px-4 py-3 flex items-center gap-3 transition-colors text-sm text-white/80 hover:bg-white/10 hover:text-white"><i class="fas '+i.icon+' w-5 text-center"></i> '+i.label+'</button>').join('');
-}
-function navigate(page) {
-  const pages = {
-    dashboard: loadDashboard,
-    catalog: loadCatalog,
-    clients: loadClients,
-    deals: loadDeals,
-    scripts: loadScripts,
-    objections: loadObjections,
-    'nova-poshta': loadNovaPoshta,
-    tasks: loadTasks,
-    reports: loadReports,
-    ranking: loadRanking,
-  };
-  if (pages[page]) pages[page]();
-}
-// Заглушки для страниц (чтобы не падать)
-async function loadCatalog() { document.getElementById('content').innerHTML = '<h1>Каталог агрегатів</h1><p>В розробці</p>'; }
-async function loadClients() { document.getElementById('content').innerHTML = '<h1>Клієнти</h1><p>В розробці</p>'; }
-async function loadDeals() { document.getElementById('content').innerHTML = '<h1>Воронка угод</h1><p>В розробці</p>'; }
-async function loadScripts() { document.getElementById('content').innerHTML = '<h1>Скрипти продажів</h1><p>В розробці</p>'; }
-async function loadObjections() { document.getElementById('content').innerHTML = '<h1>Заперечення</h1><p>В розробці</p>'; }
-async function loadNovaPoshta() { document.getElementById('content').innerHTML = '<h1>Нова Пошта</h1><p>В розробці</p>'; }
-async function loadTasks() { document.getElementById('content').innerHTML = '<h1>Завдання</h1><p>В розробці</p>'; }
-async function loadReports() { document.getElementById('content').innerHTML = '<h1>Звіти</h1><p>В розробці</p>'; }
-async function loadRanking() { document.getElementById('content').innerHTML = '<h1>Рейтинг</h1><p>В розробці</p>'; }
-// Дашборд
-async function loadDashboard() {
-  const d = await fetchAPI('/api/dashboard');
-  document.getElementById('content').innerHTML = '<h1 class="text-2xl font-bold text-primary mb-6">Мій дашборд</h1>'+
-    '<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">'+
-      '<div class="card"><p class="text-gray-500 text-sm">Мої угоди (сьогодні)</p><p class="text-3xl font-bold text-primary">'+d.analytics.total_deals+'</p></div>'+
-      '<div class="card"><p class="text-gray-500 text-sm">Виручка (оплачено)</p><p class="text-3xl font-bold text-success">'+d.analytics.total_revenue.toLocaleString('uk-UA')+' ₴</p></div>'+
-      '<div class="card"><p class="text-gray-500 text-sm">Конверсія</p><p class="text-3xl font-bold text-accent">'+d.analytics.conversion+'%</p></div>'+
-      '<div class="card"><p class="text-gray-500 text-sm">Виручка команди (місяць)</p><p class="text-3xl font-bold text-primary">'+d.team_month_revenue.toLocaleString('uk-UA')+' ₴</p></div>'+
-    '</div>'+
-    '<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">'+
-      '<div class="card"><h3 class="font-bold text-primary mb-3">📋 Мої завдання на сьогодні</h3>'+(d.tasks_today.length ? d.tasks_today.map(t => '<div class="flex items-center gap-2 py-2 border-b text-sm"><i class="fas fa-phone text-accent"></i><span>'+t.Описание+'</span><span class="ml-auto text-gray-400">'+t.Время+'</span></div>').join('') : '<p class="text-gray-400">Немає завдань</p>')+'</div>'+
-      '<div class="card"><h3 class="font-bold text-primary mb-3">🚗 Мої клієнти</h3>'+(d.last_clients.length ? d.last_clients.map(c => '<div class="flex items-center gap-2 py-2 border-b text-sm"><span class="font-medium">'+(c.Имя||'—')+'</span><span class="text-gray-400">'+(c.Авто||'')+'</span><span class="ml-auto">'+statusBadge(c.Статус)+'</span></div>').join('') : '<p class="text-gray-400">Немає клієнтів</p>')+'</div>'+
-    '</div>';
-}
-document.getElementById('user_name').textContent = currentManager.name;
-document.getElementById('topbar_name').textContent = currentManager.name;
-document.getElementById('user_avatar').textContent = currentManager.name[0];
-buildNav();
-loadDashboard();
-</script>
-"""
+.badge-blue{background:#dbeafe;color:#1e40af}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px 12px;background:#f8fafc;color:var(--muted);font-weight:600}
+td{padding:8px 12px;border-bottom:1px solid #e2e8f0}
+</style>"""
 
 LOGIN_PAGE = _STYLE + """
-<div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary to-slate-800 p-4">
-  <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
-    <h1 class="text-2xl font-bold text-center text-primary mb-2">CRM Стартери & Генератори</h1>
-    <p class="text-center text-gray-500 mb-6">Виберіть менеджера для входу</p>
-    <div class="grid grid-cols-2 gap-3" id="manager-list"></div>
+<div style="display:flex;justify-content:center;align-items:center;min-height:100vh;background:linear-gradient(135deg,#1e3a5f,#0f172a)">
+  <div class="card" style="width:360px;text-align:center">
+    <h1 style="color:var(--primary)">⚡ CRM Агрегати</h1>
+    <p style="color:var(--muted);margin:12px 0 24px">Стартери & Генератори</p>
+    <input type="text" id="tg_id" placeholder="Ваш Telegram ID" style="width:100%;padding:10px;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:12px;font-size:14px">
+    <button class="btn btn-primary" onclick="login()" style="width:100%">Войти</button>
+    <div id="err" style="color:red;margin-top:8px;font-size:13px"></div>
   </div>
 </div>
 <script>
-const RENDER_URL = '""" + RENDER_URL + """';
-async function fetchAPI(url, method='GET', body) {
-  const opts = {method, headers:{'Content-Type':'application/json'}};
-  if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(url, opts);
-  return r.json();
-}
-async function loadManagers() {
-  const managers = await fetchAPI('/api/managers');
-  const list = document.getElementById('manager-list');
-  list.innerHTML = managers.map(m => `
-    <button onclick="login('${m.Telegram_ID}')" class="flex items-center gap-3 p-3 rounded-xl border-2 border-gray-200 hover:border-accent hover:bg-orange-50 transition-all">
-      <div class="w-10 h-10 rounded-full bg-primary text-white flex items-center justify-center font-bold text-sm">${m.Имя?.[0]||'M'}</div>
-      <span class="font-medium text-sm">${m.Имя||'Менеджер'}</span>
-    </button>
-  `).join('');
-}
-async function login(tgId) {
-  const r = await fetchAPI('/api/login', 'POST', {tg_id: tgId});
-  if (r.ok) {
-    localStorage.setItem('manager_name', r.name);
-    localStorage.setItem('manager_id', tgId);
+async function login(){
+  const tg = document.getElementById('tg_id').value.trim();
+  if(!tg) { document.getElementById('err').textContent='Введите ID'; return; }
+  const r = await fetch('/api/login', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({tg_id: tg})
+  });
+  const d = await r.json();
+  if(d.ok) {
     window.location.href = '/dashboard';
   } else {
-    alert('Ошибка входа');
+    document.getElementById('err').textContent = d.error || 'Ошибка';
   }
 }
-loadManagers();
 </script>
 """
 
-NAV_PAGE = """
-<nav class="sidebar" id="sidebar">
-  <div class="p-4 border-b border-white/20">
-    <h2 class="text-white font-bold text-lg">⚡ CRM Агрегати</h2>
-    <p class="text-white/60 text-xs">Стартери & Генератори</p>
-  </div>
-  <div class="py-2 flex-1 overflow-y-auto" id="nav-links"></div>
-  <div class="p-4 border-t border-white/20">
-    <div class="flex items-center gap-3 text-white/80">
-      <div class="w-8 h-8 rounded-full bg-accent text-white flex items-center justify-center font-bold text-xs" id="user_avatar">М</div>
-      <span class="text-sm" id="user_name"></span>
-    </div>
-    <button onclick="logout()" class="text-white/60 hover:text-white text-xs mt-2 flex items-center gap-1"><i class="fas fa-sign-out-alt"></i> Вийти</button>
-  </div>
-</nav>
-<div class="main-content">
-  <div class="bg-white shadow-sm px-4 py-3 flex items-center justify-between sticky top-0 z-30">
-    <button onclick="document.getElementById('sidebar').classList.toggle('open')" class="md:hidden text-primary text-xl">☰</button>
-    <span class="font-semibold text-primary" id="topbar_name"></span>
-    <button onclick="logout()" class="text-sm text-gray-500 hover:text-danger"><i class="fas fa-sign-out-alt"></i> Вийти</button>
-  </div>
-  <div class="p-4 md:p-6" id="content"></div>
-</div>
-<div id="toast" class="toast" style="display:none"></div>
-<div id="modal-container"></div>
-"""
+def build_dashboard(mid: str) -> str:
+    d = get_dashboard(mid)
+    name = d["name"]
+    a = d["analytics"]
+    team_rev = d["team_month_revenue"]
+    tasks_today = d["tasks_today"]
+    last_clients = d["last_clients"]
 
-DASHBOARD_PAGE = _STYLE + NAV_PAGE + _APP_JS
+    def badge(status):
+        if status in ("Оплачено","Выполнено","в наличии"): return "badge-green"
+        if status in ("Новый","Переговоры","Новая","Запланировано"): return "badge-blue"
+        return "badge-yellow"
+
+    tasks_html = ""
+    if tasks_today:
+        for t in tasks_today:
+            tasks_html += f'<tr><td>{t.get("Описание","")}</td><td>{t.get("Время","")}</td><td><span class="badge {badge(t.get("Статус",""))}">{t.get("Статус","")}</span></td></tr>'
+    else:
+        tasks_html = '<tr><td colspan="3" style="color:var(--muted)">Нет задач на сегодня</td></tr>'
+
+    clients_html = ""
+    if last_clients:
+        for c in last_clients:
+            clients_html += f'<tr><td>{c.get("Имя","—")}</td><td>{c.get("Авто","")}</td><td>{c.get("Агрегат","")}</td><td><span class="badge {badge(c.get("Статус",""))}">{c.get("Статус","")}</span></td></tr>'
+    else:
+        clients_html = '<tr><td colspan="4" style="color:var(--muted)">Нет клиентов</td></tr>'
+
+    return _STYLE + f"""
+    <div style="display:flex;min-height:100vh">
+      <div style="background:var(--primary);width:250px;color:#fff;padding:20px">
+        <h3>⚡ CRM Агрегати</h3>
+        <p style="font-size:12px;opacity:0.7">Стартери & Генератори</p>
+        <nav style="margin-top:20px;display:flex;flex-direction:column;gap:4px">
+          <a href="/dashboard" style="color:#fff;padding:8px;border-radius:6px;background:rgba(255,255,255,0.1)">📊 Дашборд</a>
+          <a href="#" style="color:rgba(255,255,255,0.7);padding:8px">🗄️ Агрегаты</a>
+          <a href="#" style="color:rgba(255,255,255,0.7);padding:8px">👥 Клиенты</a>
+          <a href="#" style="color:rgba(255,255,255,0.7);padding:8px">💰 Сделки</a>
+          <a href="#" style="color:rgba(255,255,255,0.7);padding:8px">📝 Задачи</a>
+        </nav>
+        <div style="margin-top:auto;padding-top:20px;border-top:1px solid rgba(255,255,255,0.2)">
+          <p style="font-size:14px">{name}</p>
+          <a href="/logout" style="color:rgba(255,255,255,0.7);font-size:12px">Выйти</a>
+        </div>
+      </div>
+      <div style="flex:1;padding:24px">
+        <h1 style="margin-bottom:24px">Добро пожаловать, {name} 👋</h1>
+        <div class="grid2">
+          <div class="card"><div style="color:var(--muted);font-size:13px">Сделок всего</div><div style="font-size:28px;font-weight:700">{a["total_deals"]}</div></div>
+          <div class="card"><div style="color:var(--muted);font-size:13px">Выручка всего</div><div style="font-size:28px;font-weight:700">{a["total_revenue"]} ₴</div></div>
+          <div class="card"><div style="color:var(--muted);font-size:13px">Конверсия</div><div style="font-size:28px;font-weight:700">{a["conversion"]}%</div></div>
+          <div class="card"><div style="color:var(--muted);font-size:13px">Выручка команды (мес)</div><div style="font-size:28px;font-weight:700">{team_rev} ₴</div></div>
+        </div>
+        <div class="grid2" style="grid-template-columns:1fr 1fr">
+          <div class="card">
+            <h3 style="margin-bottom:12px">📋 Задачи на сегодня</h3>
+            <table>{tasks_html}</table>
+          </div>
+          <div class="card">
+            <h3 style="margin-bottom:12px">🚗 Последние клиенты</h3>
+            <table><tr><th>Имя</th><th>Авто</th><th>Агрегат</th><th>Статус</th></tr>{clients_html}</table>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
 
 # ─────────── HTTP-сервер ───────────
 class CRMHandler(BaseHTTPRequestHandler):
@@ -515,35 +357,18 @@ class CRMHandler(BaseHTTPRequestHandler):
         mid = self._auth()
         if p == "/":
             if mid:
-                self._html(DASHBOARD_PAGE)
+                self._html(build_dashboard(mid))
             else:
                 self._html(LOGIN_PAGE)
         elif p == "/dashboard":
             if not mid:
                 self._redirect("/")
             else:
-                self._html(DASHBOARD_PAGE)
+                self._html(build_dashboard(mid))
+        elif p == "/logout":
+            self._redirect("/")
         elif p == "/api/managers":
             self._json(ws("Менеджеры").get_all_records())
-        elif p == "/api/dashboard":
-            if not mid: self._json({"error":"Unauthorized"}, 403); return
-            self._json(get_dashboard(mid))
-        elif p == "/api/clients":
-            if not mid: self._json({"error":"Unauthorized"}, 403); return
-            self._json(get_clients(mid))
-        elif p == "/api/aggregates":
-            self._json(get_aggregates())
-        elif p == "/api/products":
-            self._json(get_products())
-        elif p == "/api/deals":
-            if not mid: self._json({"error":"Unauthorized"}, 403); return
-            self._json(get_deals(mid))
-        elif p == "/api/tasks":
-            if not mid: self._json({"error":"Unauthorized"}, 403); return
-            self._json(get_tasks(mid))
-        elif p == "/api/analytics":
-            if not mid: self._json({"error":"Unauthorized"}, 403); return
-            self._json(get_analytics(mid))
         else:
             self.send_error(404)
 
@@ -553,20 +378,6 @@ class CRMHandler(BaseHTTPRequestHandler):
         mid = self._auth()
         if p == "/api/login":
             self._login(body)
-        elif p == "/api/add_client":
-            if not mid: self._json({"error":"Unauthorized"}, 403); return
-            self._json({"ok": add_client(body, mid)})
-        elif p == "/api/add_aggregate":
-            self._json({"ok": add_aggregate(body)})
-        elif p == "/api/add_deal":
-            if not mid: self._json({"error":"Unauthorized"}, 403); return
-            self._json({"ok": add_deal(body, mid)})
-        elif p == "/api/add_task":
-            if not mid: self._json({"error":"Unauthorized"}, 403); return
-            self._json({"ok": add_task(body, mid)})
-        elif p == "/api/update_task":
-            if not mid: self._json({"error":"Unauthorized"}, 403); return
-            self._json({"ok": update_task(body.get("id",""), body.get("status",""), mid)})
         else:
             self.send_error(404)
 
@@ -806,11 +617,10 @@ async def cb_set_status(update, context):
     if idx is None or idx >= len(products):
         await q.edit_message_text("Ошибка сессии")
         return
-    ok = update_product_status(idx + 2, new_status)
-    if ok:
-        await q.edit_message_text(f"✅ Статус изменён на *{new_status}*", parse_mode="Markdown")
-    else:
-        await q.edit_message_text("❌ Не удалось обновить статус")
+    # обновление статуса
+    w = open_wb().sheet1
+    w.update_cell(idx + 2, 5, new_status)
+    await q.edit_message_text(f"✅ Статус изменён на *{new_status}*", parse_mode="Markdown")
     context.user_data.pop("edit_idx", None)
 
 async def search_product_ask(update, context):
