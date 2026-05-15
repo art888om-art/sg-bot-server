@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>CRM Заявки</title>
+  <style>
+    body { font-family: Arial; padding: 20px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: 8px; }
+    th { background: #f0f0f0; }
+  </style>
+</head>
+<body>
+  <h1>Заявки</h1>
+  <table id="table">
+    <thead><tr><th>ID</th><th>Телефон</th><th>Товар</th><th>Статус</th><th>Действие</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <script>
+    function load() {
+      fetch('/api/deals').then(r => r.json()).then(deals => {
+        const tbody = document.querySelector('#table tbody');
+        tbody.innerHTML = '';
+        deals.forEach(d => {
+          tbody.innerHTML += `<tr>
+            <td>${d.id}</td>
+            <td>${d.client_phone || '-'}</td>
+            <td>${d.product_name || '-'}</td>
+            <td>${d.status}</td>
+            <td>
+              <select onchange="update(${d.id}, this.value)">
+                <option value="">Сменить</option>
+                <option value="new">Новый</option>
+                <option value="in_progress">В работе</option>
+                <option value="sold">Продан</option>
+                <option value="rejected">Отказ</option>
+              </select>
+            </td>
+          </tr>`;
+        });
+      });
+    }
+    function update(id, status) {
+      fetch(`/api/deals/${id}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ status })
+      }).then(() => load());
+    }
+    load();
+  </script>
+</body>
+</html>
