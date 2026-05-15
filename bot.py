@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 CRM-система для продажи генераторов и стартеров.
-Telegram-бот + веб-интерфейс. Версия 8.5 – безопасный, быстрый монолит.
+Telegram-бот + веб-интерфейс. Версия 8.1 – исправлены f-строки в HTML.
 """
-import os, sys, hmac, hashlib, logging, threading, json
-from datetime import datetime, date, timedelta
+import os, logging, threading, json
+from datetime import datetime, date
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 from dotenv import load_dotenv
@@ -26,19 +26,16 @@ SHEET_URL = os.getenv("GOOGLE_SHEET_URL", "")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000").rstrip("/")
 WEB_PORT = int(os.environ.get("PORT", 8000))
-# Секретный ключ для подписи кук – замените на случайную строку!
-SECRET_KEY = os.getenv("SECRET_KEY", "CHANGE_ME_IN_PRODUCTION").encode()
-TOKEN_EXPIRE_DAYS = 30
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Google Sheets (синхронный клиент, но вызовы будем оборачивать в потоки)
+# Google Sheets
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("google_key.json", SCOPE)
 gc = gspread.authorize(creds)
 
-# ─────────── Структура листов (без изменений) ───────────
+# ─────────── Структура листов ───────────
 SHEET_SCHEMA = {
     "Клиенты":   ["ID", "Имя", "Телефон", "Авто", "VIN", "Агрегат", "Тип", "Состояние",
                   "Цена", "Комментарий", "Статус", "История", "Менеджер_ID", "Дата_создания"],
@@ -49,105 +46,33 @@ SHEET_SCHEMA = {
     "Задачи":    ["ID", "Менеджер_ID", "Описание", "Дата", "Время", "Статус", "Комментарий"],
 }
 
-# ─────────── Утилиты для подписанных кук ───────────
-def sign_token(data: str) -> str:
-    """Создаёт подписанный токен: данные и HMAC."""
-    h = hmac.new(SECRET_KEY, data.encode(), hashlib.sha256).hexdigest()
-    return f"{data}|{h}"
+def open_wb():
+    return gc.open_by_url(SHEET_URL)
 
-def verify_token(token: str) -> str | None:
-    """Проверяет токен и возвращает данные (Telegram ID) или None."""
-    try:
-        data, sig = token.rsplit("|", 1)
-        expected = hmac.new(SECRET_KEY, data.encode(), hashlib.sha256).hexdigest()
-        if hmac.compare_digest(expected, sig):
-            return data
-        return None
-    except Exception:
-        return None
+def ws(name: str):
+    return open_wb().worksheet(name)
 
-# ─────────── Кеширующий враппер для Google Sheets ───────────
-class SheetsCache:
-    """Обёртка для ускорения работы с листами (снижает нагрузку на API)."""
-    def __init__(self):
-        self._wb = gc.open_by_url(SHEET_URL)
-        self._cache = {}  # имя_листа -> (данные, время_кэширования)
-        self._lock = threading.Lock()
-        self._ttl = 10  # секунд
-
-    def _get_ws(self, name: str):
-        return self._wb.worksheet(name)
-
-    def get_all_records(self, name: str) -> list[dict]:
-        now = datetime.now().timestamp()
-        with self._lock:
-            cached = self._cache.get(name)
-            if cached and (now - cached[1]) < self._ttl:
-                return cached[0]
-        ws = self._get_ws(name)
-        data = ws.get_all_records()
-        with self._lock:
-            self._cache[name] = (data, now)
-        return data
-
-    def append_row(self, name: str, row: list):
-        ws = self._get_ws(name)
-        ws.append_row(row)
-        self.invalidate(name)
-
-    def update_cell(self, name: str, row: int, col: int, value):
-        ws = self._get_ws(name)
-        ws.update_cell(row, col, value)
-        self.invalidate(name)
-
-    def add_worksheet(self, name: str, rows: int, cols: int):
-        ws = self._wb.add_worksheet(title=name, rows=rows, cols=cols)
-        self.invalidate(name)
-        return ws
-
-    def worksheet_titles(self):
-        return [ws.title for ws in self._wb.worksheets()]
-
-    def get_sheet1(self):
-        return self._wb.sheet1
-
-    def invalidate(self, name: str):
-        with self._lock:
-            self._cache.pop(name, None)
-
-sheets = SheetsCache()
-
-# ─────────── Инициализация листов ───────────
 def init_sheets():
-    existing = sheets.worksheet_titles()
+    wb = open_wb()
+    existing = {ws.title for ws in wb.worksheets()}
     for name, headers in SHEET_SCHEMA.items():
         if name not in existing:
-            ws = sheets.add_worksheet(name, 500, len(headers) + 2)
+            ws = wb.add_worksheet(title=name, rows=500, cols=len(headers) + 2)
             ws.insert_row(headers, 1)
             logger.info(f"Создан лист: {name}")
         else:
-            # Проверка заголовков
-            records = sheets.get_all_records(name)
-            if records:
-                row1 = list(records[0].keys())
-            else:
-                row1 = []
+            ws = wb.worksheet(name)
+            row1 = ws.row_values(1)
             for h in headers:
                 if h not in row1:
-                    # Добавляем недостающий столбец (приблизительно)
-                    ws = sheets._get_ws(name)
                     ws.add_cols(1)
-                    col_idx = len(row1) + 1
-                    ws.update_cell(1, col_idx, h)
+                    ws.update_cell(1, len(row1) + 1, h)
                     row1.append(h)
-            # Специфично для Клиенты: добавляем недостающие столбцы
             if name == "Клиенты":
                 for extra in ["Менеджер_ID", "Дата_создания"]:
                     if extra not in row1:
-                        ws = sheets._get_ws(name)
                         ws.add_cols(1)
-                        col_idx = len(row1) + 1
-                        ws.update_cell(1, col_idx, extra)
+                        ws.update_cell(1, len(row1) + 1, extra)
                         row1.append(extra)
 try:
     init_sheets()
@@ -156,7 +81,11 @@ except Exception as e:
 
 # ─────────── Вспомогательные функции ───────────
 def next_id(records: list) -> int:
-    ids = [int(str(r.get("ID", "0"))) for r in records if str(r.get("ID", "")).isdigit()]
+    ids = []
+    for r in records:
+        raw = str(r.get("ID", "")).strip()
+        if raw.isdigit():
+            ids.append(int(raw))
     return max(ids, default=0) + 1
 
 def now() -> str:
@@ -168,7 +97,7 @@ def today() -> str:
 # ── Менеджеры ──
 def get_manager_name(mid: str) -> str:
     try:
-        for r in sheets.get_all_records("Менеджеры"):
+        for r in ws("Менеджеры").get_all_records():
             if str(r.get("Telegram_ID", "")).strip() == str(mid).strip():
                 return r.get("Имя", f"Менеджер #{mid}")
         return f"Менеджер #{mid}"
@@ -178,31 +107,36 @@ def get_manager_name(mid: str) -> str:
 
 def register_manager(mid: str, name: str, role: str = "Менеджер"):
     try:
-        records = sheets.get_all_records("Менеджеры")
+        w = ws("Менеджеры")
+        records = w.get_all_records()
         for r in records:
             if str(r.get("Telegram_ID", "")).strip() == str(mid).strip():
                 return
-        sheets.append_row("Менеджеры", [str(mid), name, role])
+        w.append_row([str(mid), name, role])
     except Exception as e:
         logger.error(f"register_manager: {e}")
 
 # ── Клиенты ──
 def get_clients(mid: str | None = None) -> list:
-    records = sheets.get_all_records("Клиенты")
-    if mid:
-        return [r for r in records if str(r.get("Менеджер_ID", "")).strip() == str(mid).strip()]
-    return records
+    try:
+        records = ws("Клиенты").get_all_records()
+        if mid:
+            return [r for r in records if str(r.get("Менеджер_ID", "")).strip() == str(mid).strip()]
+        return records
+    except Exception as e:
+        logger.error(f"get_clients: {e}")
+        return []
 
 def add_client(data: dict, mid: str) -> bool:
     try:
-        nid = next_id(sheets.get_all_records("Клиенты"))
-        row = [
+        w = ws("Клиенты")
+        nid = next_id(w.get_all_records())
+        w.append_row([
             str(nid), data.get("name", ""), data.get("phone", ""), data.get("auto", ""),
             data.get("vin", ""), data.get("unit", ""), data.get("unit_type", ""),
             data.get("condition", ""), data.get("price", ""), data.get("comment", ""),
             data.get("status", "Новый"), data.get("history", ""), str(mid), now()
-        ]
-        sheets.append_row("Клиенты", row)
+        ])
         return True
     except Exception as e:
         logger.error(f"add_client: {e}")
@@ -211,7 +145,8 @@ def add_client(data: dict, mid: str) -> bool:
 # ── Товары (Sheet1) ──
 def get_products(search: str = "") -> list:
     try:
-        records = sheets.get_sheet1().get_all_records()
+        w = open_wb().sheet1
+        records = w.get_all_records()
         if search:
             s = search.lower()
             records = [r for r in records if s in str(r.get("Модель", "")).lower() or s in str(r.get("Тип", "")).lower()]
@@ -222,15 +157,14 @@ def get_products(search: str = "") -> list:
 
 def add_product(data: dict) -> tuple[bool, int]:
     try:
-        records = sheets.get_sheet1().get_all_records()
+        w = open_wb().sheet1
+        records = w.get_all_records()
         nid = next_id(records)
-        row = [
+        w.append_row([
             str(nid), data.get("type", ""), data.get("model", ""),
             data.get("price", ""), data.get("status", "в наличии"),
             data.get("description", ""), data.get("photo_id", "")
-        ]
-        sheets.get_sheet1().append_row(row)
-        sheets.invalidate("Sheet1")  # сброс кэша
+        ])
         return True, nid
     except Exception as e:
         logger.error(f"add_product: {e}")
@@ -238,8 +172,8 @@ def add_product(data: dict) -> tuple[bool, int]:
 
 def update_product_status(row_index: int, new_status: str) -> bool:
     try:
-        sheets.get_sheet1().update_cell(row_index, 5, new_status)
-        sheets.invalidate("Sheet1")
+        w = open_wb().sheet1
+        w.update_cell(row_index, 5, new_status)
         return True
     except Exception as e:
         logger.error(f"update_product_status: {e}")
@@ -247,22 +181,26 @@ def update_product_status(row_index: int, new_status: str) -> bool:
 
 # ── Агрегаты ──
 def get_aggregates(search: str = "") -> list:
-    records = sheets.get_all_records("Агрегаты")
-    if search:
-        s = search.lower()
-        records = [r for r in records if s in str(r.get("Модель", "")).lower() or s in str(r.get("Тип", "")).lower()]
-    return records
+    try:
+        records = ws("Агрегаты").get_all_records()
+        if search:
+            s = search.lower()
+            records = [r for r in records if s in str(r.get("Модель", "")).lower() or s in str(r.get("Тип", "")).lower()]
+        return records
+    except Exception as e:
+        logger.error(f"get_aggregates: {e}")
+        return []
 
 def add_aggregate(data: dict) -> bool:
     try:
-        nid = next_id(sheets.get_all_records("Агрегаты"))
-        row = [
+        w = ws("Агрегаты")
+        nid = next_id(w.get_all_records())
+        w.append_row([
             str(nid), data.get("type", ""), data.get("model", ""),
             data.get("analog", ""), data.get("features", ""),
             data.get("availability", ""), data.get("price", ""),
             data.get("warranty", "")
-        ]
-        sheets.append_row("Агрегаты", row)
+        ])
         return True
     except Exception as e:
         logger.error(f"add_aggregate: {e}")
@@ -270,19 +208,23 @@ def add_aggregate(data: dict) -> bool:
 
 # ── Сделки ──
 def get_deals(mid: str | None = None) -> list:
-    records = sheets.get_all_records("Сделки")
-    if mid:
-        return [r for r in records if str(r.get("Менеджер_ID", "")).strip() == str(mid).strip()]
-    return records
+    try:
+        records = ws("Сделки").get_all_records()
+        if mid:
+            return [r for r in records if str(r.get("Менеджер_ID", "")).strip() == str(mid).strip()]
+        return records
+    except Exception as e:
+        logger.error(f"get_deals: {e}")
+        return []
 
 def add_deal(data: dict, mid: str) -> bool:
     try:
-        nid = next_id(sheets.get_all_records("Сделки"))
-        row = [
+        w = ws("Сделки")
+        nid = next_id(w.get_all_records())
+        w.append_row([
             str(nid), data.get("client_id", ""), data.get("product_id", ""),
             data.get("amount", ""), data.get("status", "Новая"), now(), str(mid)
-        ]
-        sheets.append_row("Сделки", row)
+        ])
         return True
     except Exception as e:
         logger.error(f"add_deal: {e}")
@@ -290,35 +232,44 @@ def add_deal(data: dict, mid: str) -> bool:
 
 # ── Задачи ──
 def get_tasks(mid: str | None = None, only_today: bool = False) -> list:
-    records = sheets.get_all_records("Задачи")
-    if mid:
-        records = [r for r in records if str(r.get("Менеджер_ID", "")).strip() == str(mid).strip()]
-    if only_today:
-        t = today()
-        records = [r for r in records if r.get("Дата", "") == t]
-    return records
+    try:
+        records = ws("Задачи").get_all_records()
+        if mid:
+            records = [r for r in records if str(r.get("Менеджер_ID", "")).strip() == str(mid).strip()]
+        if only_today:
+            t = today()
+            records = [r for r in records if r.get("Дата", "") == t]
+        return records
+    except Exception as e:
+        logger.error(f"get_tasks: {e}")
+        return []
 
 def add_task(data: dict, mid: str) -> bool:
     try:
-        nid = next_id(sheets.get_all_records("Задачи"))
-        row = [
+        w = ws("Задачи")
+        nid = next_id(w.get_all_records())
+        w.append_row([
             str(nid), str(mid), data.get("description", ""),
             data.get("date", ""), data.get("time", ""),
             data.get("status", "Запланировано"), ""
-        ]
-        sheets.append_row("Задачи", row)
+        ])
         return True
     except Exception as e:
         logger.error(f"add_task: {e}")
         return False
 
 def update_task(task_id: str, new_status: str, mid: str) -> bool:
-    records = sheets.get_all_records("Задачи")
-    for i, r in enumerate(records, start=2):
-        if str(r.get("ID", "")) == str(task_id) and str(r.get("Менеджер_ID", "")) == str(mid):
-            sheets.update_cell("Задачи", i, 6, new_status)
-            return True
-    return False
+    try:
+        w = ws("Задачи")
+        records = w.get_all_records()
+        for i, r in enumerate(records, start=2):
+            if str(r.get("ID", "")) == str(task_id) and str(r.get("Менеджер_ID", "")) == str(mid):
+                w.update_cell(i, 6, new_status)
+                return True
+        return False
+    except Exception as e:
+        logger.error(f"update_task: {e}")
+        return False
 
 # ── Аналитика ──
 def get_analytics(mid: str | None = None) -> dict:
@@ -327,7 +278,7 @@ def get_analytics(mid: str | None = None) -> dict:
         total_rev = sum(float(str(d.get("Сумма", 0)).replace(",", ".") or 0) for d in deals)
         count = len(deals)
         try:
-            calls_all = sheets.get_all_records("Звонки")
+            calls_all = ws("Звонки").get_all_records()
             calls = len([c for c in calls_all if not mid or str(c.get("Менеджер_ID", "")) == str(mid)])
         except Exception:
             calls = 0
@@ -363,83 +314,83 @@ def get_dashboard(mid: str) -> dict:
         "last_clients": last_clients,
     }
 
-# ─────────── HTML-страницы (оставлены как были) ───────────
+# ─────────── HTML-страницы (исправленные f-строки) ───────────
 _NAV = """
 <nav class="navbar"><div class="nav-inner"><a class="brand" href="/dashboard">⚡ AutoCRM</a><div class="nav-links"><a href="/dashboard">Дашборд</a><a href="/clients">Клиенты</a><a href="/aggregates">Агрегаты</a><a href="/deals">Сделки</a><a href="/tasks">Задачи</a></div><div class="nav-right"><span id="nav_user"></span><button class="btn-logout" onclick="logout()">Выйти</button></div></div></nav>
-<script>document.getElementById('nav_user').textContent=localStorage.getItem('manager_name')||'';function logout(){localStorage.clear();document.cookie='auth_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;';window.location.href='/';}</script>
+<script>document.getElementById('nav_user').textContent=localStorage.getItem('manager_name')||'';function logout(){{localStorage.clear();document.cookie='auth_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;';window.location.href='/';}}</script>
 """
 
 _BASE_CSS = """
 <style>
-:root{--bg:#0d0f14;--surface:#161922;--border:#2a2f42;--accent:#f5a623;--text:#e8eaf0;--muted:#6b7280;--green:#22c55e;--red:#ef4444;--blue:#3b82f6;--radius:10px}
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;min-height:100vh}
-a{color:var(--accent);text-decoration:none}
-.navbar{background:var(--surface);border-bottom:1px solid var(--border);padding:0 24px;position:sticky;top:0;z-index:100}
-.nav-inner{display:flex;align-items:center;height:56px;gap:24px}
-.brand{font-size:18px;font-weight:700;color:var(--accent)}
-.nav-links{display:flex;gap:4px;flex:1}
-.nav-links a{padding:6px 14px;border-radius:6px;color:var(--muted);font-size:14px;transition:all 0.2s}
-.nav-links a:hover,.nav-links a.active{background:var(--surface);color:var(--text)}
-.nav-right{display:flex;align-items:center;gap:12px}
-#nav_user{color:var(--muted);font-size:13px}
-.btn-logout{background:transparent;border:1px solid var(--border);color:var(--muted);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:13px;transition:all 0.2s}
-.btn-logout:hover{border-color:var(--red);color:var(--red)}
-.container{max-width:1280px;margin:0 auto;padding:28px 24px}
-.page-title{font-size:22px;font-weight:700;margin-bottom:20px}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
-.card-header{font-size:13px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px}
-.card-value{font-size:28px;font-weight:700}
-.card-sub{font-size:12px;color:var(--muted);margin-top:4px}
-.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px}
-.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:7px;font-size:14px;font-weight:500;cursor:pointer;border:none;transition:all 0.2s}
-.btn-primary{background:var(--accent);color:#000}
-.btn-success{background:var(--green);color:#000}
-.btn-danger{background:var(--red);color:#fff}
-.btn-secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}
-.btn-sm{padding:4px 10px;font-size:12px}
-.table-wrap{overflow-x:auto}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{background:var(--surface);color:var(--muted);text-align:left;padding:10px 14px;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border)}
-td{padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle}
-tr:last-child td{border-bottom:none}
-.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
-.badge-green{background:rgba(34,197,94,0.15);color:var(--green)}
-.badge-yellow{background:rgba(245,166,35,0.15);color:var(--accent)}
-.badge-red{background:rgba(239,68,68,0.15);color:var(--red)}
-.badge-blue{background:rgba(59,130,246,0.15);color:var(--blue)}
-.badge-gray{background:rgba(107,114,128,0.15);color:var(--muted)}
-.form-section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:20px;display:none}
-.form-section.open{display:block}
-.form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
-label{font-size:12px;color:var(--muted)}
-input,select,textarea{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 12px;font-size:13px;outline:none;width:100%}
-input:focus,select:focus,textarea:focus{border-color:var(--accent)}
-select option{background:var(--surface)}
-.form-actions{margin-top:16px;display:flex;gap:8px}
-.toolbar{display:flex;align-items:center;gap:12px;margin-bottom:20px}
-.search-input{background:var(--surface);border:1px solid var(--border);color:var(--text);padding:8px 14px;border-radius:7px;font-size:13px;outline:none;min-width:240px}
-.search-input:focus{border-color:var(--accent)}
-.widgets-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px}
-.widget{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
-.widget h3{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:14px}
-.task-item,.client-item{padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
-.client-name{font-weight:600;font-size:13px}
-.client-meta{font-size:12px;color:var(--muted);margin-top:2px}
-#toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:8px;font-size:13px;font-weight:500;display:none;z-index:9999}
-#toast.success{background:var(--green);color:#000}
-#toast.error{background:var(--red);color:#fff}
-.login-wrap{display:flex;justify-content:center;align-items:center;min-height:100vh}
-.login-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:40px;width:360px;text-align:center}
-.login-card h1{font-size:24px;margin-bottom:6px}
-.login-card p{color:var(--muted);font-size:14px;margin-bottom:28px}
-.login-card input{margin-bottom:12px}
-.login-logo{font-size:48px;margin-bottom:16px}
-@media(max-width:768px){.widgets-row{grid-template-columns:1fr}.nav-links{display:none}.form-grid{grid-template-columns:1fr}}
+:root{{--bg:#0d0f14;--surface:#161922;--border:#2a2f42;--accent:#f5a623;--text:#e8eaf0;--muted:#6b7280;--green:#22c55e;--red:#ef4444;--blue:#3b82f6;--radius:10px}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;min-height:100vh}}
+a{{color:var(--accent);text-decoration:none}}
+.navbar{{background:var(--surface);border-bottom:1px solid var(--border);padding:0 24px;position:sticky;top:0;z-index:100}}
+.nav-inner{{display:flex;align-items:center;height:56px;gap:24px}}
+.brand{{font-size:18px;font-weight:700;color:var(--accent)}}
+.nav-links{{display:flex;gap:4px;flex:1}}
+.nav-links a{{padding:6px 14px;border-radius:6px;color:var(--muted);font-size:14px;transition:all 0.2s}}
+.nav-links a:hover,.nav-links a.active{{background:var(--surface);color:var(--text)}}
+.nav-right{{display:flex;align-items:center;gap:12px}}
+#nav_user{{color:var(--muted);font-size:13px}}
+.btn-logout{{background:transparent;border:1px solid var(--border);color:var(--muted);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:13px;transition:all 0.2s}}
+.btn-logout:hover{{border-color:var(--red);color:var(--red)}}
+.container{{max-width:1280px;margin:0 auto;padding:28px 24px}}
+.page-title{{font-size:22px;font-weight:700;margin-bottom:20px}}
+.card{{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px}}
+.card-header{{font-size:13px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px}}
+.card-value{{font-size:28px;font-weight:700}}
+.card-sub{{font-size:12px;color:var(--muted);margin-top:4px}}
+.stats-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px}}
+.btn{{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:7px;font-size:14px;font-weight:500;cursor:pointer;border:none;transition:all 0.2s}}
+.btn-primary{{background:var(--accent);color:#000}}
+.btn-success{{background:var(--green);color:#000}}
+.btn-danger{{background:var(--red);color:#fff}}
+.btn-secondary{{background:var(--surface);color:var(--text);border:1px solid var(--border)}}
+.btn-sm{{padding:4px 10px;font-size:12px}}
+.table-wrap{{overflow-x:auto}}
+table{{width:100%;border-collapse:collapse;font-size:13px}}
+th{{background:var(--surface);color:var(--muted);text-align:left;padding:10px 14px;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border)}}
+td{{padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle}}
+tr:last-child td{{border-bottom:none}}
+.badge{{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}}
+.badge-green{{background:rgba(34,197,94,0.15);color:var(--green)}}
+.badge-yellow{{background:rgba(245,166,35,0.15);color:var(--accent)}}
+.badge-red{{background:rgba(239,68,68,0.15);color:var(--red)}}
+.badge-blue{{background:rgba(59,130,246,0.15);color:var(--blue)}}
+.badge-gray{{background:rgba(107,114,128,0.15);color:var(--muted)}}
+.form-section{{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:20px;display:none}}
+.form-section.open{{display:block}}
+.form-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}}
+label{{font-size:12px;color:var(--muted)}}
+input,select,textarea{{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 12px;font-size:13px;outline:none;width:100%}}
+input:focus,select:focus,textarea:focus{{border-color:var(--accent)}}
+select option{{background:var(--surface)}}
+.form-actions{{margin-top:16px;display:flex;gap:8px}}
+.toolbar{{display:flex;align-items:center;gap:12px;margin-bottom:20px}}
+.search-input{{background:var(--surface);border:1px solid var(--border);color:var(--text);padding:8px 14px;border-radius:7px;font-size:13px;outline:none;min-width:240px}}
+.search-input:focus{{border-color:var(--accent)}}
+.widgets-row{{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px}}
+.widget{{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px}}
+.widget h3{{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:14px}}
+.task-item,.client-item{{padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}}
+.client-name{{font-weight:600;font-size:13px}}
+.client-meta{{font-size:12px;color:var(--muted);margin-top:2px}}
+#toast{{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:8px;font-size:13px;font-weight:500;display:none;z-index:9999}}
+#toast.success{{background:var(--green);color:#000}}
+#toast.error{{background:var(--red);color:#fff}}
+.login-wrap{{display:flex;justify-content:center;align-items:center;min-height:100vh}}
+.login-card{{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:40px;width:360px;text-align:center}}
+.login-card h1{{font-size:24px;margin-bottom:6px}}
+.login-card p{{color:var(--muted);font-size:14px;margin-bottom:28px}}
+.login-card input{{margin-bottom:12px}}
+.login-logo{{font-size:48px;margin-bottom:16px}}
+@media(max-width:768px){{.widgets-row{{grid-template-columns:1fr}}.nav-links{{display:none}}.form-grid{{grid-template-columns:1fr}}}}
 </style>
 <script>
-function toast(msg,type='success'){const t=document.getElementById('toast');t.textContent=msg;t.className=type;t.style.display='block';setTimeout(()=>{t.style.display='none'},3000)}
-function statusBadge(s){const map={'Новый':'badge-blue','В обработке':'badge-yellow','Закрыт':'badge-gray','в наличии':'badge-green','продан':'badge-red','в ремонте':'badge-yellow','Новая':'badge-blue','Выполнено':'badge-green','Просрочено':'badge-red','Запланировано':'badge-yellow'};return `<span class="badge ${map[s]||'badge-gray'}">${s}</span>`}
+function toast(msg,type='success'){{const t=document.getElementById('toast');t.textContent=msg;t.className=type;t.style.display='block';setTimeout(()=>{{t.style.display='none'}},3000)}}
+function statusBadge(s){{const map={{'Новый':'badge-blue','В обработке':'badge-yellow','Закрыт':'badge-gray','в наличии':'badge-green','продан':'badge-red','в ремонте':'badge-yellow','Новая':'badge-blue','Выполнено':'badge-green','Просрочено':'badge-red','Запланировано':'badge-yellow'}};return `<span class="badge ${{map[s]||'badge-gray'}}">${{s}}</span>`}}
 </script>
 <div id="toast"></div>
 """
@@ -450,7 +401,7 @@ document.addEventListener('keydown',e=>{{if(e.key==='Enter')doLogin()}});
 </script></body></html>"""
 
 DASHBOARD_PAGE = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Дашборд</title>{_BASE_CSS}</head><body>{_NAV}<div class="container"><h1>Добро пожаловать, <span id="greet_name">...</span> 👋</h1><div class="stats-grid"><div class="card"><div class="card-header">Сделок всего</div><div class="card-value" id="s_deals">—</div></div><div class="card"><div class="card-header">Выручка всего</div><div class="card-value" id="s_rev">—</div></div><div class="card"><div class="card-header">Сделок за месяц</div><div class="card-value" id="s_m_deals">—</div></div><div class="card"><div class="card-header">Выручка за месяц</div><div class="card-value" id="s_m_rev">—</div></div><div class="card"><div class="card-header">Звонков</div><div class="card-value" id="s_calls">—</div><div class="card-sub">Конверсия: <span id="s_conv">—</span>%</div></div><div class="card" style="border-color:var(--accent)"><div class="card-header">Выручка команды (месяц)</div><div class="card-value" id="s_team">—</div><div class="card-sub">сделок: <span id="s_team_deals">—</span></div></div></div><div class="widgets-row"><div class="widget"><h3>📋 Задачи на сегодня</h3><div id="w_tasks">...</div></div><div class="widget"><h3>🚗 Последние клиенты</h3><div id="w_clients">...</div></div></div></div><script>
-async function load(){{const r=await fetch('/api/dashboard');if(r.status===403){{window.location.href='/';return}}const d=await r.json();document.getElementById('greet_name').textContent=d.name;document.getElementById('nav_user').textContent=d.name;document.getElementById('s_deals').textContent=d.analytics.total_deals;document.getElementById('s_rev').textContent=d.analytics.total_revenue.toLocaleString('uk-UA');document.getElementById('s_m_deals').textContent=d.analytics.month_deals;document.getElementById('s_m_rev').textContent=d.analytics.month_revenue.toLocaleString('uk-UA');document.getElementById('s_calls').textContent=d.analytics.total_calls;document.getElementById('s_conv').textContent=d.analytics.conversion;document.getElementById('s_team').textContent=d.team_month_revenue.toLocaleString('uk-UA');document.getElementById('s_team_deals').textContent=d.team_month_deals;document.getElementById('w_tasks').innerHTML=d.tasks_today.length?d.tasks_today.map(t=>`<div class="task-item"><b>${t.Описание||''}</b> <span style="color:var(--muted)">${t.Время||''}</span> ${statusBadge(t.Статус)}</div>`).join(''):'<p style="color:var(--muted)">Нет задач</p>';document.getElementById('w_clients').innerHTML=d.last_clients.length?d.last_clients.map(c=>`<div class="client-item"><div class="client-name">${c.Имя||'—'}</div><div class="client-meta">${c.Авто||''} · ${c.Агрегат||''} · ${statusBadge(c.Статус)}</div></div>`).join(''):'<p style="color:var(--muted)">Нет клиентов</p>'}}
+async function load(){{const r=await fetch('/api/dashboard');if(r.status===403){{window.location.href='/';return}}const d=await r.json();document.getElementById('greet_name').textContent=d.name;document.getElementById('nav_user').textContent=d.name;document.getElementById('s_deals').textContent=d.analytics.total_deals;document.getElementById('s_rev').textContent=d.analytics.total_revenue.toLocaleString('uk-UA');document.getElementById('s_m_deals').textContent=d.analytics.month_deals;document.getElementById('s_m_rev').textContent=d.analytics.month_revenue.toLocaleString('uk-UA');document.getElementById('s_calls').textContent=d.analytics.total_calls;document.getElementById('s_conv').textContent=d.analytics.conversion;document.getElementById('s_team').textContent=d.team_month_revenue.toLocaleString('uk-UA');document.getElementById('s_team_deals').textContent=d.team_month_deals;document.getElementById('w_tasks').innerHTML=d.tasks_today.length?d.tasks_today.map(t=>`<div class="task-item"><b>${{t.Описание||''}}</b> <span style="color:var(--muted)">${{t.Время||''}}</span> ${{statusBadge(t.Статус)}}</div>`).join(''):'<p style="color:var(--muted)">Нет задач</p>';document.getElementById('w_clients').innerHTML=d.last_clients.length?d.last_clients.map(c=>`<div class="client-item"><div class="client-name">${{c.Имя||'—'}}</div><div class="client-meta">${{c.Авто||''}} · ${{c.Агрегат||''}} · ${{statusBadge(c.Статус)}}</div></div>`).join(''):'<p style="color:var(--muted)">Нет клиентов</p>'}}
 load();
 </script></body></html>"""
 
@@ -459,7 +410,7 @@ let clients=[];
 function toggleForm(){{document.getElementById('addForm').classList.toggle('open')}}
 function fmt(s){{if(!s)return '—';const d=new Date(s);if(isNaN(d))return s;return d.toLocaleString('uk-UA',{{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}})}}
 function filterTable(){{const q=document.getElementById('search').value.toLowerCase();render(clients.filter(c=>(c.Имя||'').toLowerCase().includes(q)||(c.Телефон||'').toLowerCase().includes(q)||(c.VIN||'').toLowerCase().includes(q)||(c.Авто||'').toLowerCase().includes(q)))}}
-function render(data){{document.getElementById('cnt').textContent=data.length+' клиентов';document.getElementById('tbody').innerHTML=data.map(c=>`<tr><td><b>${c.Имя||'—'}</b></td><td><a href="tel:${c.Телефон}">${c.Телефон||'—'}</a></td><td>${c.Авто||'—'}</td><td>${c.VIN||'—'}</td><td>${c.Агрегат||'—'}</td><td>${c.Тип||'—'}</td><td>${c.Состояние||'—'}</td><td>${c.Цена?c.Цена+'₴':'—'}</td><td>${statusBadge(c.Статус)}</td><td>${c.Комментарий||'—'}</td><td>${fmt(c.Дата_создания)}</td></tr>`).join('')}}
+function render(data){{document.getElementById('cnt').textContent=data.length+' клиентов';document.getElementById('tbody').innerHTML=data.map(c=>`<tr><td><b>${{c.Имя||'—'}}</b></td><td><a href="tel:${{c.Телефон}}">${{c.Телефон||'—'}}</a></td><td>${{c.Авто||'—'}}</td><td>${{c.VIN||'—'}}</td><td>${{c.Агрегат||'—'}}</td><td>${{c.Тип||'—'}}</td><td>${{c.Состояние||'—'}}</td><td>${{c.Цена?c.Цена+'₴':'—'}}</td><td>${{statusBadge(c.Статус)}}</td><td>${{c.Комментарий||'—'}}</td><td>${{fmt(c.Дата_создания)}}</td></tr>`).join('')}}
 async function load(){{const r=await fetch('/api/clients');if(r.status===403){{window.location.href='/';return}}clients=await r.json();render(clients)}}
 async function saveClient(){{const d={{name:document.getElementById('f_name').value.trim(),phone:document.getElementById('f_phone').value.trim(),auto:document.getElementById('f_auto').value.trim(),vin:document.getElementById('f_vin').value.trim(),unit:document.getElementById('f_unit').value.trim(),unit_type:document.getElementById('f_type').value,condition:document.getElementById('f_cond').value,price:document.getElementById('f_price').value,comment:document.getElementById('f_comment').value.trim(),status:document.getElementById('f_status').value}};if(!d.name||!d.phone){{toast('Заполните имя и телефон','error');return}}const r=await fetch('/api/add_client',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(d)}});const j=await r.json();if(j.ok){{toast('Клиент добавлен');toggleForm();load()}}else{{toast('Ошибка сохранения','error')}}}}
 load();
@@ -469,7 +420,7 @@ AGGREGATES_PAGE = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta nam
 let aggs=[];
 function toggleForm(){{document.getElementById('addForm').classList.toggle('open')}}
 function filterTable(){{const q=document.getElementById('search').value.toLowerCase();render(aggs.filter(a=>(a.Тип||'').toLowerCase().includes(q)||(a.Модель||'').toLowerCase().includes(q)||(a.Аналог||'').toLowerCase().includes(q)))}}
-function render(data){{document.getElementById('cnt').textContent=data.length+' агрегатов';document.getElementById('tbody').innerHTML=data.map(a=>`<tr><td>${a.Тип||'—'}</td><td><b>${a.Модель||'—'}</b></td><td>${a.Аналог||'—'}</td><td>${a.Характеристики||'—'}</td><td>${statusBadge(a.Наличие)}</td><td>${a.Цена?a.Цена+'₴':'—'}</td><td>${a.Гарантия||'—'}</td></tr>`).join('')}}
+function render(data){{document.getElementById('cnt').textContent=data.length+' агрегатов';document.getElementById('tbody').innerHTML=data.map(a=>`<tr><td>${{a.Тип||'—'}}</td><td><b>${{a.Модель||'—'}}</b></td><td>${{a.Аналог||'—'}}</td><td>${{a.Характеристики||'—'}}</td><td>${{statusBadge(a.Наличие)}}</td><td>${{a.Цена?a.Цена+'₴':'—'}}</td><td>${{a.Гарантия||'—'}}</td></tr>`).join('')}}
 async function load(){{const r=await fetch('/api/aggregates');if(r.status===403){{window.location.href='/';return}}aggs=await r.json();render(aggs)}}
 async function saveAgg(){{const d={{type:document.getElementById('f_type').value,model:document.getElementById('f_model').value.trim(),analog:document.getElementById('f_analog').value.trim(),features:document.getElementById('f_feat').value.trim(),availability:document.getElementById('f_avail').value,price:document.getElementById('f_price').value,warranty:document.getElementById('f_war').value.trim()}};if(!d.model){{toast('Введите модель','error');return}}const r=await fetch('/api/add_aggregate',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(d)}});const j=await r.json();if(j.ok){{toast('Агрегат добавлен');toggleForm();load()}}else{{toast('Ошибка сохранения','error')}}}}
 load();
@@ -477,14 +428,14 @@ load();
 
 DEALS_PAGE = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Сделки</title>{_BASE_CSS}</head><body>{_NAV}<div class="container"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px"><h1>💰 Мои сделки</h1><button class="btn btn-primary" onclick="toggleForm()">➕ Добавить сделку</button></div><div class="form-section" id="addForm"><div class="form-grid"><div class="form-group"><label>ID клиента *</label><input id="f_client" placeholder="ID из базы"></div><div class="form-group"><label>ID товара *</label><input id="f_product" placeholder="ID агрегата"></div><div class="form-group"><label>Сумма (₴) *</label><input id="f_amount" type="number"></div><div class="form-group"><label>Статус</label><select id="f_status"><option>Новая</option><option>В обработке</option><option>Закрыта</option></select></div></div><div class="form-actions"><button class="btn btn-success" onclick="saveDeal()">Сохранить</button><button class="btn btn-secondary" onclick="toggleForm()">Отмена</button></div></div><div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table><thead><tr><th>#</th><th>Клиент ID</th><th>Товар ID</th><th>Сумма</th><th>Статус</th><th>Дата</th></tr></thead><tbody id="tbody"></tbody></table></div></div></div><script>
 function toggleForm(){{document.getElementById('addForm').classList.toggle('open')}}
-async function load(){{const r=await fetch('/api/deals');if(r.status===403){{window.location.href='/';return}}const d=await r.json();document.getElementById('tbody').innerHTML=d.map(d=>`<tr><td>${d.ID||''}</td><td>${d.Клиент_ID||'—'}</td><td>${d.Товар_ID||'—'}</td><td><b>${d.Сумма?d.Сумма+'₴':'—'}</b></td><td>${statusBadge(d.Статус)}</td><td>${d.Дата||'—'}</td></tr>`).join('')}}
+async function load(){{const r=await fetch('/api/deals');if(r.status===403){{window.location.href='/';return}}const d=await r.json();document.getElementById('tbody').innerHTML=d.map(d=>`<tr><td>${{d.ID||''}}</td><td>${{d.Клиент_ID||'—'}}</td><td>${{d.Товар_ID||'—'}}</td><td><b>${{d.Сумма?d.Сумма+'₴':'—'}}</b></td><td>${{statusBadge(d.Статус)}}</td><td>${{d.Дата||'—'}}</td></tr>`).join('')}}
 async function saveDeal(){{const d={{client_id:document.getElementById('f_client').value,product_id:document.getElementById('f_product').value,amount:document.getElementById('f_amount').value,status:document.getElementById('f_status').value}};if(!d.client_id||!d.amount){{toast('Заполните обязательные поля','error');return}}const r=await fetch('/api/add_deal',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(d)}});const j=await r.json();if(j.ok){{toast('Сделка добавлена');toggleForm();load()}}else{{toast('Ошибка сохранения','error')}}}}
 load();
 </script></body></html>"""
 
 TASKS_PAGE = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Задачи</title>{_BASE_CSS}</head><body>{_NAV}<div class="container"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px"><h1>📝 Мои задачи</h1><button class="btn btn-primary" onclick="toggleForm()">➕ Добавить задачу</button></div><div class="form-section" id="addForm"><div class="form-grid"><div class="form-group" style="grid-column:span 2"><label>Описание *</label><input id="f_desc" placeholder="Позвонить клиенту..."></div><div class="form-group"><label>Дата *</label><input id="f_date" type="date"></div><div class="form-group"><label>Время</label><input id="f_time" type="time"></div></div><div class="form-actions"><button class="btn btn-success" onclick="saveTask()">Сохранить</button><button class="btn btn-secondary" onclick="toggleForm()">Отмена</button></div></div><div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table><thead><tr><th>Описание</th><th>Дата</th><th>Время</th><th>Статус</th><th>Действия</th></tr></thead><tbody id="tbody"></tbody></table></div></div></div><script>
 function toggleForm(){{document.getElementById('addForm').classList.toggle('open')}}
-async function load(){{const r=await fetch('/api/tasks');if(r.status===403){{window.location.href='/';return}}const d=await r.json();document.getElementById('tbody').innerHTML=d.map(t=>`<tr><td>${t.Описание||'—'}</td><td>${t.Дата||'—'}</td><td>${t.Время||'—'}</td><td>${statusBadge(t.Статус)}</td><td style="display:flex;gap:6px;flex-wrap:wrap">${t.Статус!=='Выполнено'?`<button class="btn btn-sm btn-success" onclick="setStatus('${t.ID}','Выполнено')">✓ Выполнено</button>`:''}${t.Статус!=='Просрочено'?`<button class="btn btn-sm btn-danger" onclick="setStatus('${t.ID}','Просрочено')">⏰ Просрочено</button>`:''}</td></tr>`).join('')}}
+async function load(){{const r=await fetch('/api/tasks');if(r.status===403){{window.location.href='/';return}}const d=await r.json();document.getElementById('tbody').innerHTML=d.map(t=>`<tr><td>${{t.Описание||'—'}}</td><td>${{t.Дата||'—'}}</td><td>${{t.Время||'—'}}</td><td>${{statusBadge(t.Статус)}}</td><td style="display:flex;gap:6px;flex-wrap:wrap">${{t.Статус!=='Выполнено'?`<button class="btn btn-sm btn-success" onclick="setStatus('${{t.ID}}','Выполнено')">✓ Выполнено</button>`:''}}${{t.Статус!=='Просрочено'?`<button class="btn btn-sm btn-danger" onclick="setStatus('${{t.ID}}','Просрочено')">⏰ Просрочено</button>`:''}}</td></tr>`).join('')}}
 async function setStatus(id,status){{await fetch('/api/update_task',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{id,status}})}});load()}}
 async function saveTask(){{const d={{description:document.getElementById('f_desc').value.trim(),date:document.getElementById('f_date').value,time:document.getElementById('f_time').value}};if(!d.description||!d.date){{toast('Заполните описание и дату','error');return}}const r=await fetch('/api/add_task',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(d)}});const j=await r.json();if(j.ok){{toast('Задача добавлена');toggleForm();load()}}else{{toast('Ошибка сохранения','error')}}}}
 document.getElementById('f_date').value=new Date().toISOString().split('T')[0];
@@ -557,8 +508,7 @@ class CRMHandler(BaseHTTPRequestHandler):
         cookie = self.headers.get("Cookie", "")
         for part in cookie.split(";"):
             if "auth_token=" in part.strip():
-                token = part.strip().split("=", 1)[-1]
-                return verify_token(token)
+                return part.strip().split("=")[-1]
         return None
 
     def _body(self):
@@ -579,13 +529,12 @@ class CRMHandler(BaseHTTPRequestHandler):
             return
         register_manager(tg_id, name or f"Менеджер #{tg_id}")
         mname = get_manager_name(tg_id)
-        token = sign_token(tg_id)
         self.send_response(200); self.send_header("Content-Type", "application/json")
-        self.send_header("Set-Cookie", f"auth_token={token}; Path=/; HttpOnly; SameSite=Lax")
+        self.send_header("Set-Cookie", f"auth_token={tg_id}; Path=/; HttpOnly; SameSite=Lax")
         self.end_headers()
         self.wfile.write(json.dumps({"ok": True, "name": mname}, ensure_ascii=False).encode())
 
-# ─────────── Telegram-бот (без изменений) ───────────
+# ─────────── Telegram-бот ───────────
 T_TYPE, T_MODEL, T_PRICE, T_STATUS, T_DESCRIPTION, T_PHOTO = range(6)
 PRODUCT_STATUSES = ["в наличии", "продан", "в ремонте"]
 
@@ -615,6 +564,7 @@ async def _cancel(update, context):
 def _is_cancel(text):
     return text.strip() in ("❌ Отмена", "🔙 Назад", "/cancel")
 
+# ── Старт и хелп ──
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     name = user.full_name or f"Пользователь #{user.id}"
@@ -637,6 +587,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown", reply_markup=kb_main()
     )
 
+# ── Обработчики главного меню ──
 async def handle_clients(update, context):
     btn = InlineKeyboardMarkup([[InlineKeyboardButton("Открыть базу клиентов", web_app=WebAppInfo(url=RENDER_URL + "/clients"))]])
     await update.message.reply_text("📋 Нажмите для открытия:", reply_markup=btn)
@@ -767,6 +718,7 @@ async def prod_photo(update, context):
         await update.message.reply_text("❌ Ошибка сохранения", reply_markup=kb_agregat())
     return ConversationHandler.END
 
+# ── Все товары ──
 async def show_all_products(update, context):
     products = get_products()
     if not products:
@@ -799,6 +751,7 @@ async def cb_product_detail(update, context):
         logger.error(f"product detail: {e}")
         await q.edit_message_text(text, parse_mode="Markdown")
 
+# ── Изменение статуса ──
 async def change_status_start(update, context):
     products = get_products()
     if not products:
@@ -832,6 +785,7 @@ async def cb_set_status(update, context):
         await q.edit_message_text("❌ Не удалось обновить статус")
     context.user_data.pop("edit_idx", None)
 
+# ── Поиск товара ──
 async def search_product_ask(update, context):
     await update.message.reply_text("Введите модель или тип:", reply_markup=kb_cancel())
     context.user_data["awaiting_search"] = True
@@ -852,6 +806,7 @@ async def search_product_result(update, context):
     context.user_data["products_cache"] = results[:10]
     await update.message.reply_text(f"🔍 Найдено: *{len(results)}*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(btns))
 
+# ── Главный обработчик текста ──
 async def handle_text(update, context):
     txt = update.message.text.strip()
     if txt == "🗄️ Агрегаты":
