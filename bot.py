@@ -669,30 +669,45 @@ async def add_description(update, context):
     return PHOTO
 
 async def add_photo(update, context):
-    if update.message and update.message.text in ("❌ Отмена", "🔙 Назад"):
+    # Проверка на кнопки выхода (если сообщение текстовое)
+    if update.message and update.message.text and update.message.text.strip() in ("❌ Отмена", "🔙 Назад"):
         return await cancel_add(update, context)
+
     photo_id = ""
+    # Если пришло фото — берём file_id
     if update.message.photo:
         photo_id = update.message.photo[-1].file_id
+    # Если текст — проверяем, что это "нет"
     elif update.message.text and update.message.text.strip().lower() in ("нет", "no", "-"):
-        pass
+        pass  # пропускаем фото
     else:
+        # Всё остальное — просим прислать фото или написать "нет"
         await update.message.reply_text("Отправьте фото или напишите 'нет'.")
-        return PHOTO
+        return PHOTO  # остаёмся в состоянии PHOTO
+
+    # Сохраняем товар
     data = context.user_data
     all_rows = main_sheet.get_all_records()
     new_id = max([int(r["ID"]) for r in all_rows if r["ID"].isdigit()] + [0]) + 1
     try:
-        main_sheet.append_row([str(new_id), data["type"], data["model"], str(data["price"]),
-                               data["status"], data["description"], photo_id])
-        await update.message.reply_text(f"✅ Товар *{data['model']}* добавлен! (ID {new_id})", parse_mode="Markdown", reply_markup=agregat_menu())
+        main_sheet.append_row([
+            str(new_id), data["type"], data["model"], str(data["price"]),
+            data["status"], data["description"], photo_id
+        ])
+        await update.message.reply_text(
+            f"✅ Товар *{data['model']}* добавлен! (ID {new_id})",
+            parse_mode="Markdown", reply_markup=agregat_menu()
+        )
     except Exception as e:
-        logger.error(f"Ошибка записи товара: {e}")
-        await update.message.reply_text("❌ Не удалось сохранить товар.", reply_markup=agregat_menu())
+        logger.error(f"Ошибка сохранения товара: {e}")
+        await update.message.reply_text("❌ Не удалось сохранить товар. Попробуйте ещё раз.", reply_markup=agregat_menu())
+
+    # Очищаем данные и выходим из диалога
     context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel_add(update, context):
+    # На случай, если cancel_add вызывается из callback-а (но у нас всегда сообщение)
     await update.message.reply_text("Добавление отменено.", reply_markup=main_menu())
     context.user_data.clear()
     return ConversationHandler.END
@@ -769,7 +784,10 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_photo),
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel_add)],
+        fallbacks=[
+        CommandHandler("cancel", cancel_add),
+        MessageHandler(filters.Regex("^(❌ Отмена|🔙 Назад)$"), cancel_add)
+    ],
     )
 
     search_conv = ConversationHandler(
