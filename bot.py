@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 CRM-система для продажи генераторов и стартеров.
-Telegram-бот + современный веб-интерфейс. Версия 9.1 – исправлены f-строки, убран Chart.js.
+Telegram-бот + современный веб-интерфейс. Версия 9.2 – исправлены строки, стили работают.
 """
 import os, logging, threading, json
 from datetime import datetime, date
@@ -314,147 +314,145 @@ def get_dashboard(mid: str) -> dict:
         "last_clients": last_clients,
     }
 
-# ─────────── HTML-страницы (исправлены фигурные скобки) ───────────
-_NAV = """
-<nav class="navbar"><div class="nav-inner"><a class="brand" href="/dashboard">⚡ AutoCRM</a><div class="nav-links"><a href="/dashboard">Дашборд</a><a href="/clients">Клиенты</a><a href="/aggregates">Агрегаты</a><a href="/deals">Сделки</a><a href="/tasks">Задачи</a></div><div class="nav-right"><span id="nav_user"></span><button class="btn-logout" onclick="logout()">Выйти</button></div></div></nav>
-<script>document.getElementById('nav_user').textContent=localStorage.getItem('manager_name')||'';function logout(){{localStorage.clear();document.cookie='auth_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;';window.location.href='/';}}</script>
-"""
-
-_BASE_CSS = """
-<style>
-:root{{--bg:#0d0f14;--surface:#161922;--border:#2a2f42;--accent:#f5a623;--text:#e8eaf0;--muted:#6b7280;--green:#22c55e;--red:#ef4444;--blue:#3b82f6;--radius:10px}}
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;min-height:100vh}}
-a{{color:var(--accent);text-decoration:none}}
-.navbar{{background:var(--surface);border-bottom:1px solid var(--border);padding:0 24px;position:sticky;top:0;z-index:100}}
-.nav-inner{{display:flex;align-items:center;height:56px;gap:24px}}
-.brand{{font-size:18px;font-weight:700;color:var(--accent)}}
-.nav-links{{display:flex;gap:4px;flex:1}}
-.nav-links a{{padding:6px 14px;border-radius:6px;color:var(--muted);font-size:14px;transition:all 0.2s}}
-.nav-links a:hover,.nav-links a.active{{background:var(--surface);color:var(--text)}}
-.nav-right{{display:flex;align-items:center;gap:12px}}
-#nav_user{{color:var(--muted);font-size:13px}}
-.btn-logout{{background:transparent;border:1px solid var(--border);color:var(--muted);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:13px;transition:all 0.2s}}
-.btn-logout:hover{{border-color:var(--red);color:var(--red)}}
-.container{{max-width:1280px;margin:0 auto;padding:28px 24px}}
-.page-title{{font-size:22px;font-weight:700;margin-bottom:20px}}
-.card{{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px}}
-.card-header{{font-size:13px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px}}
-.card-value{{font-size:28px;font-weight:700}}
-.card-sub{{font-size:12px;color:var(--muted);margin-top:4px}}
-.stats-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px}}
-.btn{{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:7px;font-size:14px;font-weight:500;cursor:pointer;border:none;transition:all 0.2s}}
-.btn-primary{{background:var(--accent);color:#000}}
-.btn-success{{background:var(--green);color:#000}}
-.btn-danger{{background:var(--red);color:#fff}}
-.btn-secondary{{background:var(--surface);color:var(--text);border:1px solid var(--border)}}
-.btn-sm{{padding:4px 10px;font-size:12px}}
-.table-wrap{{overflow-x:auto}}
-table{{width:100%;border-collapse:collapse;font-size:13px}}
-th{{background:var(--surface);color:var(--muted);text-align:left;padding:10px 14px;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border)}}
-td{{padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle}}
-tr:last-child td{{border-bottom:none}}
-.badge{{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}}
-.badge-green{{background:rgba(34,197,94,0.15);color:var(--green)}}
-.badge-yellow{{background:rgba(245,166,35,0.15);color:var(--accent)}}
-.badge-red{{background:rgba(239,68,68,0.15);color:var(--red)}}
-.badge-blue{{background:rgba(59,130,246,0.15);color:var(--blue)}}
-.badge-gray{{background:rgba(107,114,128,0.15);color:var(--muted)}}
-.form-section{{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:20px;display:none}}
-.form-section.open{{display:block}}
-.form-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}}
-label{{font-size:12px;color:var(--muted)}}
-input,select,textarea{{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 12px;font-size:13px;outline:none;width:100%}}
-input:focus,select:focus,textarea:focus{{border-color:var(--accent)}}
-select option{{background:var(--surface)}}
-.form-actions{{margin-top:16px;display:flex;gap:8px}}
-.toolbar{{display:flex;align-items:center;gap:12px;margin-bottom:20px}}
-.search-input{{background:var(--surface);border:1px solid var(--border);color:var(--text);padding:8px 14px;border-radius:7px;font-size:13px;outline:none;min-width:240px}}
-.search-input:focus{{border-color:var(--accent)}}
-.widgets-row{{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px}}
-.widget{{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px}}
-.widget h3{{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:14px}}
-.task-item,.client-item{{padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}}
-.client-name{{font-weight:600;font-size:13px}}
-.client-meta{{font-size:12px;color:var(--muted);margin-top:2px}}
-#toast{{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:8px;font-size:13px;font-weight:500;display:none;z-index:9999}}
-#toast.success{{background:var(--green);color:#000}}
-#toast.error{{background:var(--red);color:#fff}}
-.login-wrap{{display:flex;justify-content:center;align-items:center;min-height:100vh}}
-.login-card{{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:40px;width:360px;text-align:center}}
-.login-card h1{{font-size:24px;margin-bottom:6px}}
-.login-card p{{color:var(--muted);font-size:14px;margin-bottom:28px}}
-.login-card input{{margin-bottom:12px}}
-.login-logo{{font-size:48px;margin-bottom:16px}}
-@media(max-width:768px){{.widgets-row{{grid-template-columns:1fr}}.nav-links{{display:none}}.form-grid{{grid-template-columns:1fr}}}}
+# ─────────── HTML-страницы (полностью исправлены) ───────────
+_STYLE = """<style>
+:root{--bg:#0d0f14;--surface:#161922;--border:#2a2f42;--accent:#f5a623;--text:#e8eaf0;--muted:#6b7280;--green:#22c55e;--red:#ef4444;--blue:#3b82f6;--radius:10px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;min-height:100vh}
+a{color:var(--accent);text-decoration:none}
+.navbar{background:var(--surface);border-bottom:1px solid var(--border);padding:0 24px;position:sticky;top:0;z-index:100}
+.nav-inner{display:flex;align-items:center;height:56px;gap:24px}
+.brand{font-size:18px;font-weight:700;color:var(--accent)}
+.nav-links{display:flex;gap:4px;flex:1}
+.nav-links a{padding:6px 14px;border-radius:6px;color:var(--muted);font-size:14px;transition:all 0.2s}
+.nav-links a:hover,.nav-links a.active{background:var(--surface);color:var(--text)}
+.nav-right{display:flex;align-items:center;gap:12px}
+#nav_user{color:var(--muted);font-size:13px}
+.btn-logout{background:transparent;border:1px solid var(--border);color:var(--muted);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:13px;transition:all 0.2s}
+.btn-logout:hover{border-color:var(--red);color:var(--red)}
+.container{max-width:1280px;margin:0 auto;padding:28px 24px}
+.page-title{font-size:22px;font-weight:700;margin-bottom:20px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
+.card-header{font-size:13px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px}
+.card-value{font-size:28px;font-weight:700}
+.card-sub{font-size:12px;color:var(--muted);margin-top:4px}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:7px;font-size:14px;font-weight:500;cursor:pointer;border:none;transition:all 0.2s}
+.btn-primary{background:var(--accent);color:#000}
+.btn-success{background:var(--green);color:#000}
+.btn-danger{background:var(--red);color:#fff}
+.btn-secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}
+.btn-sm{padding:4px 10px;font-size:12px}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:var(--surface);color:var(--muted);text-align:left;padding:10px 14px;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border)}
+td{padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
+.badge-green{background:rgba(34,197,94,0.15);color:var(--green)}
+.badge-yellow{background:rgba(245,166,35,0.15);color:var(--accent)}
+.badge-red{background:rgba(239,68,68,0.15);color:var(--red)}
+.badge-blue{background:rgba(59,130,246,0.15);color:var(--blue)}
+.badge-gray{background:rgba(107,114,128,0.15);color:var(--muted)}
+.form-section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:20px;display:none}
+.form-section.open{display:block}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+label{font-size:12px;color:var(--muted)}
+input,select,textarea{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 12px;font-size:13px;outline:none;width:100%}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+select option{background:var(--surface)}
+.form-actions{margin-top:16px;display:flex;gap:8px}
+.toolbar{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+.search-input{background:var(--surface);border:1px solid var(--border);color:var(--text);padding:8px 14px;border-radius:7px;font-size:13px;outline:none;min-width:240px}
+.search-input:focus{border-color:var(--accent)}
+.widgets-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px}
+.widget{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
+.widget h3{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:14px}
+.task-item,.client-item{padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
+.client-name{font-weight:600;font-size:13px}
+.client-meta{font-size:12px;color:var(--muted);margin-top:2px}
+#toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:8px;font-size:13px;font-weight:500;display:none;z-index:9999}
+#toast.success{background:var(--green);color:#000}
+#toast.error{background:var(--red);color:#fff}
+.login-wrap{display:flex;justify-content:center;align-items:center;min-height:100vh}
+.login-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:40px;width:360px;text-align:center}
+.login-card h1{font-size:24px;margin-bottom:6px}
+.login-card p{color:var(--muted);font-size:14px;margin-bottom:28px}
+.login-card input{margin-bottom:12px}
+.login-logo{font-size:48px;margin-bottom:16px}
+@media(max-width:768px){.widgets-row{grid-template-columns:1fr}.nav-links{display:none}.form-grid{grid-template-columns:1fr}}
 </style>
 <script>
-function toast(msg,type='success'){{const t=document.getElementById('toast');t.textContent=msg;t.className=type;t.style.display='block';setTimeout(()=>{{t.style.display='none'}},3000)}}
-function statusBadge(s){{const map={{'Новый':'badge-blue','В обработке':'badge-yellow','Закрыт':'badge-gray','в наличии':'badge-green','продан':'badge-red','в ремонте':'badge-yellow','Новая':'badge-blue','Выполнено':'badge-green','Просрочено':'badge-red','Запланировано':'badge-yellow','Оплачено':'badge-green'}};return '<span class="badge '+(map[s]||'badge-gray')+'">'+s+'</span>'}}
+function toast(msg,type){type=type||'success';var t=document.getElementById('toast');t.textContent=msg;t.className=type;t.style.display='block';setTimeout(function(){t.style.display='none'},3000);}
+function statusBadge(s){var map={'Новый':'badge-blue','В обработке':'badge-yellow','Закрыт':'badge-gray','в наличии':'badge-green','продан':'badge-red','в ремонте':'badge-yellow','Новая':'badge-blue','Выполнено':'badge-green','Просрочено':'badge-red','Запланировано':'badge-yellow','Оплачено':'badge-green'};return '<span class="badge '+(map[s]||'badge-gray')+'">'+s+'</span>';}
 </script>
-<div id="toast"></div>
+<div id="toast"></div>"""
+
+_NAV = """
+<nav class="navbar"><div class="nav-inner"><a class="brand" href="/dashboard">⚡ AutoCRM</a><div class="nav-links"><a href="/dashboard">Дашборд</a><a href="/clients">Клиенты</a><a href="/aggregates">Агрегаты</a><a href="/deals">Сделки</a><a href="/tasks">Задачи</a></div><div class="nav-right"><span id="nav_user"></span><button class="btn-logout" onclick="logout()">Выйти</button></div></div></nav>
+<script>document.getElementById('nav_user').textContent=localStorage.getItem('manager_name')||'';function logout(){localStorage.clear();document.cookie='auth_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;';window.location.href='/';}</script>
 """
 
-LOGIN_PAGE = _BASE_CSS + """
+LOGIN_PAGE = _STYLE + """
 <div class="login-wrap"><div class="login-card"><div class="login-logo">⚡</div><h1>AutoCRM</h1><p>CRM для продажи генераторов и стартеров</p><input type="text" id="tg_id" placeholder="Ваш Telegram ID"><input type="text" id="name_inp" placeholder="Ваше имя (первый вход)"><button class="btn btn-primary" style="width:100%" onclick="doLogin()">Войти</button><div id="err" style="color:var(--red);font-size:13px;margin-top:12px"></div></div></div>
 <script>
-async function doLogin(){const tg=document.getElementById('tg_id').value.trim();const nm=document.getElementById('name_inp').value.trim();if(!tg){document.getElementById('err').textContent='Введите ID';return}const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tg_id:tg,name:nm})});const d=await r.json();if(d.ok){localStorage.setItem('manager_name',d.name);window.location.href='/dashboard'}else{document.getElementById('err').textContent=d.error||'Ошибка'}}
-document.addEventListener('keydown',e=>{if(e.key==='Enter')doLogin()});
+async function doLogin(){var tg=document.getElementById('tg_id').value.trim();var nm=document.getElementById('name_inp').value.trim();if(!tg){document.getElementById('err').textContent='Введите ID';return;}var r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tg_id:tg,name:nm})});var d=await r.json();if(d.ok){localStorage.setItem('manager_name',d.name);window.location.href='/dashboard';}else{document.getElementById('err').textContent=d.error||'Ошибка';}}
+document.addEventListener('keydown',function(e){if(e.key==='Enter')doLogin();});
 </script>
 """
 
-DASHBOARD_PAGE = _BASE_CSS + _NAV + """
+DASHBOARD_PAGE = _STYLE + _NAV + """
 <div class="container"><h1>Добро пожаловать, <span id="greet_name">...</span> 👋</h1><div class="stats-grid"><div class="card"><div class="card-header">Мои сделки сегодня</div><div class="card-value" id="s_deals">—</div></div><div class="card"><div class="card-header">Выручка всего</div><div class="card-value" id="s_rev">—</div></div><div class="card"><div class="card-header">Конверсия</div><div class="card-value" id="s_conv">—</div></div><div class="card"><div class="card-header">Выручка команды (мес)</div><div class="card-value" id="s_team">—</div></div></div><div class="widgets-row"><div class="widget"><h3>📋 Задачи на сегодня</h3><div id="w_tasks">...</div></div><div class="widget"><h3>🚗 Последние клиенты</h3><div id="w_clients">...</div></div></div></div>
 <script>
-async function load(){const r=await fetch('/api/dashboard');if(r.status===403){window.location.href='/';return}const d=await r.json();document.getElementById('greet_name').textContent=d.name;document.getElementById('nav_user').textContent=d.name;document.getElementById('s_deals').textContent=d.analytics.total_deals;document.getElementById('s_rev').textContent=d.analytics.total_revenue.toLocaleString('uk-UA')+' ₴';document.getElementById('s_conv').textContent=d.analytics.conversion+'%';document.getElementById('s_team').textContent=d.team_month_revenue.toLocaleString('uk-UA')+' ₴';document.getElementById('w_tasks').innerHTML=d.tasks_today.length?d.tasks_today.map(t=>'<div class="task-item"><b>'+t.Описание+'</b> <span style="color:var(--muted)">'+t.Время+'</span> '+statusBadge(t.Статус)+'</div>').join(''):'<p style="color:var(--muted)">Нет задач</p>';document.getElementById('w_clients').innerHTML=d.last_clients.length?d.last_clients.map(c=>'<div class="client-item"><div class="client-name">'+(c.Имя||'—')+'</div><div class="client-meta">'+(c.Авто||'')+' · '+(c.Агрегат||'')+' · '+statusBadge(c.Статус)+'</div></div>').join(''):'<p style="color:var(--muted)">Нет клиентов</p>'}
+async function load(){var r=await fetch('/api/dashboard');if(r.status===403){window.location.href='/';return;}var d=await r.json();document.getElementById('greet_name').textContent=d.name;document.getElementById('nav_user').textContent=d.name;document.getElementById('s_deals').textContent=d.analytics.total_deals;document.getElementById('s_rev').textContent=d.analytics.total_revenue.toLocaleString('uk-UA')+' ₴';document.getElementById('s_conv').textContent=d.analytics.conversion+'%';document.getElementById('s_team').textContent=d.team_month_revenue.toLocaleString('uk-UA')+' ₴';document.getElementById('w_tasks').innerHTML=d.tasks_today.length?d.tasks_today.map(function(t){return '<div class="task-item"><b>'+t.Описание+'</b> <span style="color:var(--muted)">'+t.Время+'</span> '+statusBadge(t.Статус)+'</div>';}).join(''):'<p style="color:var(--muted)">Нет задач</p>';document.getElementById('w_clients').innerHTML=d.last_clients.length?d.last_clients.map(function(c){return '<div class="client-item"><div class="client-name">'+(c.Имя||'—')+'</div><div class="client-meta">'+(c.Авто||'')+' · '+(c.Агрегат||'')+' · '+statusBadge(c.Статус)+'</div></div>';}).join(''):'<p style="color:var(--muted)">Нет клиентов</p>';}
 load();
 </script>
 """
 
-CLIENTS_PAGE = _BASE_CSS + _NAV + """
+CLIENTS_PAGE = _STYLE + _NAV + """
 <div class="container"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px"><h1>📋 Мои клиенты</h1><button class="btn btn-primary" onclick="toggleForm()">➕ Добавить клиента</button></div><div class="form-section" id="addForm"><div class="form-grid"><div class="form-group"><label>Имя *</label><input id="f_name" placeholder="Иван Иванов"></div><div class="form-group"><label>Телефон *</label><input id="f_phone" placeholder="+380..."></div><div class="form-group"><label>Автомобиль</label><input id="f_auto" placeholder="Toyota Camry"></div><div class="form-group"><label>VIN</label><input id="f_vin" placeholder="VIN-код"></div><div class="form-group"><label>Агрегат</label><input id="f_unit" placeholder="12V 120A Bosch"></div><div class="form-group"><label>Тип</label><select id="f_type"><option>Генератор</option><option>Стартер</option></select></div><div class="form-group"><label>Состояние</label><select id="f_cond"><option>Новый</option><option>Восстановленный</option><option>Б/У</option></select></div><div class="form-group"><label>Цена (₴)</label><input id="f_price" type="number"></div><div class="form-group"><label>Статус</label><select id="f_status"><option>Новый</option><option>В обработке</option><option>Закрыт</option></select></div><div class="form-group" style="grid-column:span 2"><label>Комментарий</label><input id="f_comment" placeholder="Доп. информация..."></div></div><div class="form-actions"><button class="btn btn-success" onclick="saveClient()">Сохранить</button><button class="btn btn-secondary" onclick="toggleForm()">Отмена</button></div></div><div class="toolbar"><input class="search-input" id="search" placeholder="🔍 Поиск..." oninput="filterTable()"><span id="cnt" style="color:var(--muted);font-size:13px"></span></div><div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table><thead><tr><th>Имя</th><th>Телефон</th><th>Авто</th><th>VIN</th><th>Агрегат</th><th>Тип</th><th>Состояние</th><th>Цена</th><th>Статус</th><th>Комментарий</th><th>Дата</th></tr></thead><tbody id="tbody"></tbody></table></div></div></div>
 <script>
-let clients=[];
-function toggleForm(){document.getElementById('addForm').classList.toggle('open')}
-function fmt(s){if(!s)return '—';const d=new Date(s);if(isNaN(d))return s;return d.toLocaleString('uk-UA',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}
-function filterTable(){const q=document.getElementById('search').value.toLowerCase();render(clients.filter(c=>(c.Имя||'').toLowerCase().includes(q)||(c.Телефон||'').toLowerCase().includes(q)||(c.VIN||'').toLowerCase().includes(q)||(c.Авто||'').toLowerCase().includes(q)))}
-function render(data){document.getElementById('cnt').textContent=data.length+' клиентов';document.getElementById('tbody').innerHTML=data.map(c=>'<tr><td><b>'+(c.Имя||'—')+'</b></td><td><a href="tel:'+(c.Телефон||'')+'">'+(c.Телефон||'—')+'</a></td><td>'+(c.Авто||'—')+'</td><td>'+(c.VIN||'—')+'</td><td>'+(c.Агрегат||'—')+'</td><td>'+(c.Тип||'—')+'</td><td>'+(c.Состояние||'—')+'</td><td>'+(c.Цена?c.Цена+'₴':'—')+'</td><td>'+statusBadge(c.Статус)+'</td><td>'+(c.Комментарий||'—')+'</td><td>'+fmt(c.Дата_создания)+'</td></tr>').join('')}
-async function load(){const r=await fetch('/api/clients');if(r.status===403){window.location.href='/';return}clients=await r.json();render(clients)}
-async function saveClient(){const d={name:document.getElementById('f_name').value.trim(),phone:document.getElementById('f_phone').value.trim(),auto:document.getElementById('f_auto').value.trim(),vin:document.getElementById('f_vin').value.trim(),unit:document.getElementById('f_unit').value.trim(),unit_type:document.getElementById('f_type').value,condition:document.getElementById('f_cond').value,price:document.getElementById('f_price').value,comment:document.getElementById('f_comment').value.trim(),status:document.getElementById('f_status').value};if(!d.name||!d.phone){toast('Заполните имя и телефон','error');return}const r=await fetch('/api/add_client',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});const j=await r.json();if(j.ok){toast('Клиент добавлен');toggleForm();load()}else{toast('Ошибка сохранения','error')}}
+var clients=[];
+function toggleForm(){document.getElementById('addForm').classList.toggle('open');}
+function fmt(s){if(!s)return '—';var d=new Date(s);if(isNaN(d))return s;return d.toLocaleString('uk-UA',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});}
+function filterTable(){var q=document.getElementById('search').value.toLowerCase();render(clients.filter(function(c){return (c.Имя||'').toLowerCase().includes(q)||(c.Телефон||'').toLowerCase().includes(q)||(c.VIN||'').toLowerCase().includes(q)||(c.Авто||'').toLowerCase().includes(q);}));}
+function render(data){document.getElementById('cnt').textContent=data.length+' клиентов';document.getElementById('tbody').innerHTML=data.map(function(c){return '<tr><td><b>'+(c.Имя||'—')+'</b></td><td><a href="tel:'+(c.Телефон||'')+'">'+(c.Телефон||'—')+'</a></td><td>'+(c.Авто||'—')+'</td><td>'+(c.VIN||'—')+'</td><td>'+(c.Агрегат||'—')+'</td><td>'+(c.Тип||'—')+'</td><td>'+(c.Состояние||'—')+'</td><td>'+(c.Цена?c.Цена+'₴':'—')+'</td><td>'+statusBadge(c.Статус)+'</td><td>'+(c.Комментарий||'—')+'</td><td>'+fmt(c.Дата_создания)+'</td></tr>';}).join('');}
+async function load(){var r=await fetch('/api/clients');if(r.status===403){window.location.href='/';return;}clients=await r.json();render(clients);}
+async function saveClient(){var d={name:document.getElementById('f_name').value.trim(),phone:document.getElementById('f_phone').value.trim(),auto:document.getElementById('f_auto').value.trim(),vin:document.getElementById('f_vin').value.trim(),unit:document.getElementById('f_unit').value.trim(),unit_type:document.getElementById('f_type').value,condition:document.getElementById('f_cond').value,price:document.getElementById('f_price').value,comment:document.getElementById('f_comment').value.trim(),status:document.getElementById('f_status').value};if(!d.name||!d.phone){toast('Заполните имя и телефон','error');return;}var r=await fetch('/api/add_client',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});var j=await r.json();if(j.ok){toast('Клиент добавлен');toggleForm();load();}else{toast('Ошибка сохранения','error');}}
 load();
 </script>
 """
 
-AGGREGATES_PAGE = _BASE_CSS + _NAV + """
+AGGREGATES_PAGE = _STYLE + _NAV + """
 <div class="container"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px"><h1>🗄️ База агрегатов</h1><button class="btn btn-primary" onclick="toggleForm()">➕ Добавить агрегат</button></div><div class="form-section" id="addForm"><div class="form-grid"><div class="form-group"><label>Тип</label><select id="f_type"><option>Генератор</option><option>Стартер</option></select></div><div class="form-group"><label>Модель *</label><input id="f_model" placeholder="Bosch 0 124 525 001"></div><div class="form-group"><label>Аналог</label><input id="f_analog" placeholder="Valeo 437344"></div><div class="form-group"><label>Характеристики</label><input id="f_feat" placeholder="12V, 120A"></div><div class="form-group"><label>Наличие</label><select id="f_avail"><option>В наличии</option><option>Под заказ</option><option>Нет</option></select></div><div class="form-group"><label>Цена (₴)</label><input id="f_price" type="number"></div><div class="form-group"><label>Гарантия</label><input id="f_war" placeholder="12 месяцев"></div></div><div class="form-actions"><button class="btn btn-success" onclick="saveAgg()">Сохранить</button><button class="btn btn-secondary" onclick="toggleForm()">Отмена</button></div></div><div class="toolbar"><input class="search-input" id="search" placeholder="🔍 Поиск..." oninput="filterTable()"><span id="cnt" style="color:var(--muted);font-size:13px"></span></div><div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table><thead><tr><th>Тип</th><th>Модель</th><th>Аналог</th><th>Характеристики</th><th>Наличие</th><th>Цена</th><th>Гарантия</th></tr></thead><tbody id="tbody"></tbody></table></div></div></div>
 <script>
-let aggs=[];
-function toggleForm(){document.getElementById('addForm').classList.toggle('open')}
-function filterTable(){const q=document.getElementById('search').value.toLowerCase();render(aggs.filter(a=>(a.Тип||'').toLowerCase().includes(q)||(a.Модель||'').toLowerCase().includes(q)||(a.Аналог||'').toLowerCase().includes(q)))}
-function render(data){document.getElementById('cnt').textContent=data.length+' агрегатов';document.getElementById('tbody').innerHTML=data.map(a=>'<tr><td>'+(a.Тип||'—')+'</td><td><b>'+(a.Модель||'—')+'</b></td><td>'+(a.Аналог||'—')+'</td><td>'+(a.Характеристики||'—')+'</td><td>'+statusBadge(a.Наличие)+'</td><td>'+(a.Цена?a.Цена+'₴':'—')+'</td><td>'+(a.Гарантия||'—')+'</td></tr>').join('')}
-async function load(){const r=await fetch('/api/aggregates');if(r.status===403){window.location.href='/';return}aggs=await r.json();render(aggs)}
-async function saveAgg(){const d={type:document.getElementById('f_type').value,model:document.getElementById('f_model').value.trim(),analog:document.getElementById('f_analog').value.trim(),features:document.getElementById('f_feat').value.trim(),availability:document.getElementById('f_avail').value,price:document.getElementById('f_price').value,warranty:document.getElementById('f_war').value.trim()};if(!d.model){toast('Введите модель','error');return}const r=await fetch('/api/add_aggregate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});const j=await r.json();if(j.ok){toast('Агрегат добавлен');toggleForm();load()}else{toast('Ошибка сохранения','error')}}
+var aggs=[];
+function toggleForm(){document.getElementById('addForm').classList.toggle('open');}
+function filterTable(){var q=document.getElementById('search').value.toLowerCase();render(aggs.filter(function(a){return (a.Тип||'').toLowerCase().includes(q)||(a.Модель||'').toLowerCase().includes(q)||(a.Аналог||'').toLowerCase().includes(q);}));}
+function render(data){document.getElementById('cnt').textContent=data.length+' агрегатов';document.getElementById('tbody').innerHTML=data.map(function(a){return '<tr><td>'+(a.Тип||'—')+'</td><td><b>'+(a.Модель||'—')+'</b></td><td>'+(a.Аналог||'—')+'</td><td>'+(a.Характеристики||'—')+'</td><td>'+statusBadge(a.Наличие)+'</td><td>'+(a.Цена?a.Цена+'₴':'—')+'</td><td>'+(a.Гарантия||'—')+'</td></tr>';}).join('');}
+async function load(){var r=await fetch('/api/aggregates');if(r.status===403){window.location.href='/';return;}aggs=await r.json();render(aggs);}
+async function saveAgg(){var d={type:document.getElementById('f_type').value,model:document.getElementById('f_model').value.trim(),analog:document.getElementById('f_analog').value.trim(),features:document.getElementById('f_feat').value.trim(),availability:document.getElementById('f_avail').value,price:document.getElementById('f_price').value,warranty:document.getElementById('f_war').value.trim()};if(!d.model){toast('Введите модель','error');return;}var r=await fetch('/api/add_aggregate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});var j=await r.json();if(j.ok){toast('Агрегат добавлен');toggleForm();load();}else{toast('Ошибка сохранения','error');}}
 load();
 </script>
 """
 
-DEALS_PAGE = _BASE_CSS + _NAV + """
+DEALS_PAGE = _STYLE + _NAV + """
 <div class="container"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px"><h1>💰 Мои сделки</h1><button class="btn btn-primary" onclick="toggleForm()">➕ Добавить сделку</button></div><div class="form-section" id="addForm"><div class="form-grid"><div class="form-group"><label>ID клиента *</label><input id="f_client" placeholder="ID из базы"></div><div class="form-group"><label>ID товара *</label><input id="f_product" placeholder="ID агрегата"></div><div class="form-group"><label>Сумма (₴) *</label><input id="f_amount" type="number"></div><div class="form-group"><label>Статус</label><select id="f_status"><option>Новая</option><option>В обработке</option><option>Оплачено</option><option>Закрыта</option></select></div></div><div class="form-actions"><button class="btn btn-success" onclick="saveDeal()">Сохранить</button><button class="btn btn-secondary" onclick="toggleForm()">Отмена</button></div></div><div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table><thead><tr><th>#</th><th>Клиент ID</th><th>Товар ID</th><th>Сумма</th><th>Статус</th><th>Дата</th></tr></thead><tbody id="tbody"></tbody></table></div></div></div>
 <script>
-function toggleForm(){document.getElementById('addForm').classList.toggle('open')}
-async function load(){const r=await fetch('/api/deals');if(r.status===403){window.location.href='/';return}const d=await r.json();document.getElementById('tbody').innerHTML=d.map(d=>'<tr><td>'+d.ID+'</td><td>'+(d.Клиент_ID||'—')+'</td><td>'+(d.Товар_ID||'—')+'</td><td><b>'+(d.Сумма?d.Сумма+'₴':'—')+'</b></td><td>'+statusBadge(d.Статус)+'</td><td>'+(d.Дата||'—')+'</td></tr>').join('')}
-async function saveDeal(){const d={client_id:document.getElementById('f_client').value,product_id:document.getElementById('f_product').value,amount:document.getElementById('f_amount').value,status:document.getElementById('f_status').value};if(!d.client_id||!d.amount){toast('Заполните обязательные поля','error');return}const r=await fetch('/api/add_deal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});const j=await r.json();if(j.ok){toast('Сделка добавлена');toggleForm();load()}else{toast('Ошибка сохранения','error')}}
+function toggleForm(){document.getElementById('addForm').classList.toggle('open');}
+async function load(){var r=await fetch('/api/deals');if(r.status===403){window.location.href='/';return;}var d=await r.json();document.getElementById('tbody').innerHTML=d.map(function(d){return '<tr><td>'+d.ID+'</td><td>'+(d.Клиент_ID||'—')+'</td><td>'+(d.Товар_ID||'—')+'</td><td><b>'+(d.Сумма?d.Сумма+'₴':'—')+'</b></td><td>'+statusBadge(d.Статус)+'</td><td>'+(d.Дата||'—')+'</td></tr>';}).join('');}
+async function saveDeal(){var d={client_id:document.getElementById('f_client').value,product_id:document.getElementById('f_product').value,amount:document.getElementById('f_amount').value,status:document.getElementById('f_status').value};if(!d.client_id||!d.amount){toast('Заполните обязательные поля','error');return;}var r=await fetch('/api/add_deal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});var j=await r.json();if(j.ok){toast('Сделка добавлена');toggleForm();load();}else{toast('Ошибка сохранения','error');}}
 load();
 </script>
 """
 
-TASKS_PAGE = _BASE_CSS + _NAV + """
+TASKS_PAGE = _STYLE + _NAV + """
 <div class="container"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px"><h1>📝 Мои задачи</h1><button class="btn btn-primary" onclick="toggleForm()">➕ Добавить задачу</button></div><div class="form-section" id="addForm"><div class="form-grid"><div class="form-group" style="grid-column:span 2"><label>Описание *</label><input id="f_desc" placeholder="Позвонить клиенту..."></div><div class="form-group"><label>Дата *</label><input id="f_date" type="date"></div><div class="form-group"><label>Время</label><input id="f_time" type="time"></div></div><div class="form-actions"><button class="btn btn-success" onclick="saveTask()">Сохранить</button><button class="btn btn-secondary" onclick="toggleForm()">Отмена</button></div></div><div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table><thead><tr><th>Описание</th><th>Дата</th><th>Время</th><th>Статус</th><th>Действия</th></tr></thead><tbody id="tbody"></tbody></table></div></div></div>
 <script>
-function toggleForm(){document.getElementById('addForm').classList.toggle('open')}
-async function load(){const r=await fetch('/api/tasks');if(r.status===403){window.location.href='/';return}const d=await r.json();document.getElementById('tbody').innerHTML=d.map(t=>'<tr><td>'+(t.Описание||'—')+'</td><td>'+(t.Дата||'—')+'</td><td>'+(t.Время||'—')+'</td><td>'+statusBadge(t.Статус)+'</td><td style="display:flex;gap:6px;flex-wrap:wrap">'+(t.Статус!=='Выполнено'?'<button class="btn btn-sm btn-success" onclick="setStatus(\''+t.ID+'\',\'Выполнено\')">✓ Выполнено</button>':'')+(t.Статус!=='Просрочено'?'<button class="btn btn-sm btn-danger" onclick="setStatus(\''+t.ID+'\',\'Просрочено\')">⏰ Просрочено</button>':'')+'</td></tr>').join('')}
-async function setStatus(id,status){await fetch('/api/update_task',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,status})});load()}
-async function saveTask(){const d={description:document.getElementById('f_desc').value.trim(),date:document.getElementById('f_date').value,time:document.getElementById('f_time').value};if(!d.description||!d.date){toast('Заполните описание и дату','error');return}const r=await fetch('/api/add_task',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});const j=await r.json();if(j.ok){toast('Задача добавлена');toggleForm();load()}else{toast('Ошибка сохранения','error')}}
+function toggleForm(){document.getElementById('addForm').classList.toggle('open');}
+async function load(){var r=await fetch('/api/tasks');if(r.status===403){window.location.href='/';return;}var d=await r.json();document.getElementById('tbody').innerHTML=d.map(function(t){var act='';if(t.Статус!=='Выполнено')act+='<button class="btn btn-sm btn-success" onclick="setStatus(\''+t.ID+'\',\'Выполнено\')">✓ Выполнено</button> ';if(t.Статус!=='Просрочено')act+='<button class="btn btn-sm btn-danger" onclick="setStatus(\''+t.ID+'\',\'Просрочено\')">⏰ Просрочено</button>';return '<tr><td>'+(t.Описание||'—')+'</td><td>'+(t.Дата||'—')+'</td><td>'+(t.Время||'—')+'</td><td>'+statusBadge(t.Статус)+'</td><td style="display:flex;gap:6px;flex-wrap:wrap">'+act+'</td></tr>';}).join('');}
+async function setStatus(id,status){await fetch('/api/update_task',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,status:status})});load();}
+async function saveTask(){var d={description:document.getElementById('f_desc').value.trim(),date:document.getElementById('f_date').value,time:document.getElementById('f_time').value};if(!d.description||!d.date){toast('Заполните описание и дату','error');return;}var r=await fetch('/api/add_task',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});var j=await r.json();if(j.ok){toast('Задача добавлена');toggleForm();load();}else{toast('Ошибка сохранения','error');}}
 document.getElementById('f_date').value=new Date().toISOString().split('T')[0];
 load();
 </script>
@@ -900,4 +898,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
