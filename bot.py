@@ -147,7 +147,7 @@ class CRMHTTPHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     # ----- АВТОРИЗАЦИЯ -----
-   def _api_login(self):
+       def _api_login(self):
         data = self._get_json_body()
         tg_id = str(data.get("tg_id", "")).strip()
         password = data.get("password", "")
@@ -301,20 +301,15 @@ def get_analytics_for_manager(manager_id):
 
 # ---------- HTML-страницы ----------
 LOGIN_PAGE = """
-<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Вход</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light d-flex justify-content-center align-items-center vh-100"><div class="card p-4 shadow" style="width:320px"><h4 class="mb-3">🔐 Вход в CRM</h4><input class="form-control mb-2" placeholder="Telegram ID" id="tg_id"><input class="form-control mb-2" type="password" placeholder="Пароль" id="password"><button class="btn btn-primary w-100" onclick="login()">Войти</button><div id="error" class="text-danger mt-2" style="display:none"></div></div><script>
+<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Debug Login</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light d-flex justify-content-center align-items-center vh-100"><div class="card p-4 shadow" style="width:400px"><h4 class="mb-3">🔐 Вход (режим отладки)</h4><input class="form-control mb-2" placeholder="Telegram ID" id="tg_id"><input class="form-control mb-2" type="password" placeholder="Пароль" id="password"><button class="btn btn-primary w-100" onclick="login()">Войти</button><pre id="result" class="mt-3 p-2 bg-dark text-light" style="max-height:300px;overflow:auto;font-size:12px;display:none;"></pre></div><script>
 async function login(){
   const tg_id=document.getElementById('tg_id').value;
   const password=document.getElementById('password').value;
   const res=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tg_id,password})});
-  const data=await res.json();
-  if(data.ok){
-    localStorage.setItem('manager_name',data.name);
-    localStorage.setItem('manager_id',tg_id);
-    window.location.href='/dashboard';
-  }else{
-    document.getElementById('error').textContent=data.error||'Ошибка';
-    document.getElementById('error').style.display='block';
-  }
+  const text=await res.text();
+  const pre=document.getElementById('result');
+  pre.textContent=text;
+  pre.style.display='block';
 }
 </script></body></html>"""
 
