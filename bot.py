@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 CRM-система для продажи генераторов и стартеров.
-Telegram-бот + современный веб-интерфейс. Версия 9.2 – исправлены строки, стили работают.
+Telegram-бот + современный веб-интерфейс. Версия 9.2 – полный фикс, production-ready.
 """
 import os, logging, threading, json
 from datetime import datetime, date
