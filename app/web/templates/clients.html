@@ -1,0 +1,28 @@
+{% extends "_base.html" %}
+{% block title %}Клиенты — AutoCRM{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">📋 Клиенты</h1>
+</div>
+<div class="card">
+  <table>
+    <thead>
+      <tr><th>#</th><th>Имя</th><th>Телефон</th><th>Авто</th><th>Статус</th><th>Менеджер</th></tr>
+    </thead>
+    <tbody>
+      {% for c in clients %}
+        <tr>
+          <td>{{ c.id }}</td>
+          <td>{{ c.name }}</td>
+          <td>{{ c.phone }}</td>
+          <td>{{ c.auto or '—' }}</td>
+          <td><span class="badge status-{{ c.status.value | lower }}">{{ c.status.value }}</span></td>
+          <td class="muted">{{ c.manager_id }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="muted center">Нет клиентов</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

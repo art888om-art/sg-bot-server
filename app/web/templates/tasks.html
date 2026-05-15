@@ -1,0 +1,27 @@
+{% extends "_base.html" %}
+{% block title %}Задачи — AutoCRM{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">📝 Задачи</h1>
+</div>
+<div class="card">
+  <table>
+    <thead>
+      <tr><th>#</th><th>Описание</th><th>Дата</th><th>Время</th><th>Статус</th></tr>
+    </thead>
+    <tbody>
+      {% for t in tasks %}
+        <tr>
+          <td>{{ t.id }}</td>
+          <td>{{ t.description }}</td>
+          <td>{{ t.date.isoformat() }}</td>
+          <td>{% if t.time %}{{ t.time.strftime('%H:%M') }}{% else %}—{% endif %}</td>
+          <td><span class="badge status-{{ t.status.value | lower }}">{{ t.status.value }}</span></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="muted center">Нет задач</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
