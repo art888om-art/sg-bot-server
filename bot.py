@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 CRM-система для продажи генераторов и стартеров.
-Telegram-бот + веб-интерфейс. Версия 8.0 – чистый, стабильный код.
+Telegram-бот + веб-интерфейс. Версия 8.5 – безопасный, быстрый монолит.
 """
-import os, logging, threading, json
-from datetime import datetime, date
+import os, sys, hmac, hashlib, logging, threading, json
+from datetime import datetime, date, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 from dotenv import load_dotenv
@@ -26,16 +26,19 @@ SHEET_URL = os.getenv("GOOGLE_SHEET_URL", "")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000").rstrip("/")
 WEB_PORT = int(os.environ.get("PORT", 8000))
+# Секретный ключ для подписи кук – замените на случайную строку!
+SECRET_KEY = os.getenv("SECRET_KEY", "CHANGE_ME_IN_PRODUCTION").encode()
+TOKEN_EXPIRE_DAYS = 30
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Google Sheets
+# Google Sheets (синхронный клиент, но вызовы будем оборачивать в потоки)
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("google_key.json", SCOPE)
 gc = gspread.authorize(creds)
 
-# ─────────── Структура листов ───────────
+# ─────────── Структура листов (без изменений) ───────────
 SHEET_SCHEMA = {
     "Клиенты":   ["ID", "Имя", "Телефон", "Авто", "VIN", "Агрегат", "Тип", "Состояние",
                   "Цена", "Комментарий", "Статус", "История", "Менеджер_ID", "Дата_создания"],
@@ -46,34 +49,105 @@ SHEET_SCHEMA = {
     "Задачи":    ["ID", "Менеджер_ID", "Описание", "Дата", "Время", "Статус", "Комментарий"],
 }
 
-def open_wb():
-    return gc.open_by_url(SHEET_URL)
+# ─────────── Утилиты для подписанных кук ───────────
+def sign_token(data: str) -> str:
+    """Создаёт подписанный токен: данные и HMAC."""
+    h = hmac.new(SECRET_KEY, data.encode(), hashlib.sha256).hexdigest()
+    return f"{data}|{h}"
 
-def ws(name: str):
-    return open_wb().worksheet(name)
+def verify_token(token: str) -> str | None:
+    """Проверяет токен и возвращает данные (Telegram ID) или None."""
+    try:
+        data, sig = token.rsplit("|", 1)
+        expected = hmac.new(SECRET_KEY, data.encode(), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(expected, sig):
+            return data
+        return None
+    except Exception:
+        return None
 
+# ─────────── Кеширующий враппер для Google Sheets ───────────
+class SheetsCache:
+    """Обёртка для ускорения работы с листами (снижает нагрузку на API)."""
+    def __init__(self):
+        self._wb = gc.open_by_url(SHEET_URL)
+        self._cache = {}  # имя_листа -> (данные, время_кэширования)
+        self._lock = threading.Lock()
+        self._ttl = 10  # секунд
+
+    def _get_ws(self, name: str):
+        return self._wb.worksheet(name)
+
+    def get_all_records(self, name: str) -> list[dict]:
+        now = datetime.now().timestamp()
+        with self._lock:
+            cached = self._cache.get(name)
+            if cached and (now - cached[1]) < self._ttl:
+                return cached[0]
+        ws = self._get_ws(name)
+        data = ws.get_all_records()
+        with self._lock:
+            self._cache[name] = (data, now)
+        return data
+
+    def append_row(self, name: str, row: list):
+        ws = self._get_ws(name)
+        ws.append_row(row)
+        self.invalidate(name)
+
+    def update_cell(self, name: str, row: int, col: int, value):
+        ws = self._get_ws(name)
+        ws.update_cell(row, col, value)
+        self.invalidate(name)
+
+    def add_worksheet(self, name: str, rows: int, cols: int):
+        ws = self._wb.add_worksheet(title=name, rows=rows, cols=cols)
+        self.invalidate(name)
+        return ws
+
+    def worksheet_titles(self):
+        return [ws.title for ws in self._wb.worksheets()]
+
+    def get_sheet1(self):
+        return self._wb.sheet1
+
+    def invalidate(self, name: str):
+        with self._lock:
+            self._cache.pop(name, None)
+
+sheets = SheetsCache()
+
+# ─────────── Инициализация листов ───────────
 def init_sheets():
-    wb = open_wb()
-    existing = {ws.title for ws in wb.worksheets()}
+    existing = sheets.worksheet_titles()
     for name, headers in SHEET_SCHEMA.items():
         if name not in existing:
-            ws = wb.add_worksheet(title=name, rows=500, cols=len(headers) + 2)
+            ws = sheets.add_worksheet(name, 500, len(headers) + 2)
             ws.insert_row(headers, 1)
             logger.info(f"Создан лист: {name}")
         else:
-            ws = wb.worksheet(name)
-            row1 = ws.row_values(1)
+            # Проверка заголовков
+            records = sheets.get_all_records(name)
+            if records:
+                row1 = list(records[0].keys())
+            else:
+                row1 = []
             for h in headers:
                 if h not in row1:
+                    # Добавляем недостающий столбец (приблизительно)
+                    ws = sheets._get_ws(name)
                     ws.add_cols(1)
-                    ws.update_cell(1, len(row1) + 1, h)
+                    col_idx = len(row1) + 1
+                    ws.update_cell(1, col_idx, h)
                     row1.append(h)
             # Специфично для Клиенты: добавляем недостающие столбцы
             if name == "Клиенты":
                 for extra in ["Менеджер_ID", "Дата_создания"]:
                     if extra not in row1:
+                        ws = sheets._get_ws(name)
                         ws.add_cols(1)
-                        ws.update_cell(1, len(row1) + 1, extra)
+                        col_idx = len(row1) + 1
+                        ws.update_cell(1, col_idx, extra)
                         row1.append(extra)
 try:
     init_sheets()
@@ -82,11 +156,7 @@ except Exception as e:
 
 # ─────────── Вспомогательные функции ───────────
 def next_id(records: list) -> int:
-    ids = []
-    for r in records:
-        raw = str(r.get("ID", "")).strip()
-        if raw.isdigit():
-            ids.append(int(raw))
+    ids = [int(str(r.get("ID", "0"))) for r in records if str(r.get("ID", "")).isdigit()]
     return max(ids, default=0) + 1
 
 def now() -> str:
@@ -98,7 +168,7 @@ def today() -> str:
 # ── Менеджеры ──
 def get_manager_name(mid: str) -> str:
     try:
-        for r in ws("Менеджеры").get_all_records():
+        for r in sheets.get_all_records("Менеджеры"):
             if str(r.get("Telegram_ID", "")).strip() == str(mid).strip():
                 return r.get("Имя", f"Менеджер #{mid}")
         return f"Менеджер #{mid}"
@@ -108,36 +178,31 @@ def get_manager_name(mid: str) -> str:
 
 def register_manager(mid: str, name: str, role: str = "Менеджер"):
     try:
-        w = ws("Менеджеры")
-        records = w.get_all_records()
+        records = sheets.get_all_records("Менеджеры")
         for r in records:
             if str(r.get("Telegram_ID", "")).strip() == str(mid).strip():
                 return
-        w.append_row([str(mid), name, role])
+        sheets.append_row("Менеджеры", [str(mid), name, role])
     except Exception as e:
         logger.error(f"register_manager: {e}")
 
 # ── Клиенты ──
 def get_clients(mid: str | None = None) -> list:
-    try:
-        records = ws("Клиенты").get_all_records()
-        if mid:
-            return [r for r in records if str(r.get("Менеджер_ID", "")).strip() == str(mid).strip()]
-        return records
-    except Exception as e:
-        logger.error(f"get_clients: {e}")
-        return []
+    records = sheets.get_all_records("Клиенты")
+    if mid:
+        return [r for r in records if str(r.get("Менеджер_ID", "")).strip() == str(mid).strip()]
+    return records
 
 def add_client(data: dict, mid: str) -> bool:
     try:
-        w = ws("Клиенты")
-        nid = next_id(w.get_all_records())
-        w.append_row([
+        nid = next_id(sheets.get_all_records("Клиенты"))
+        row = [
             str(nid), data.get("name", ""), data.get("phone", ""), data.get("auto", ""),
             data.get("vin", ""), data.get("unit", ""), data.get("unit_type", ""),
             data.get("condition", ""), data.get("price", ""), data.get("comment", ""),
             data.get("status", "Новый"), data.get("history", ""), str(mid), now()
-        ])
+        ]
+        sheets.append_row("Клиенты", row)
         return True
     except Exception as e:
         logger.error(f"add_client: {e}")
@@ -146,8 +211,7 @@ def add_client(data: dict, mid: str) -> bool:
 # ── Товары (Sheet1) ──
 def get_products(search: str = "") -> list:
     try:
-        w = open_wb().sheet1  # самый первый лист
-        records = w.get_all_records()
+        records = sheets.get_sheet1().get_all_records()
         if search:
             s = search.lower()
             records = [r for r in records if s in str(r.get("Модель", "")).lower() or s in str(r.get("Тип", "")).lower()]
@@ -158,14 +222,15 @@ def get_products(search: str = "") -> list:
 
 def add_product(data: dict) -> tuple[bool, int]:
     try:
-        w = open_wb().sheet1
-        records = w.get_all_records()
+        records = sheets.get_sheet1().get_all_records()
         nid = next_id(records)
-        w.append_row([
+        row = [
             str(nid), data.get("type", ""), data.get("model", ""),
             data.get("price", ""), data.get("status", "в наличии"),
             data.get("description", ""), data.get("photo_id", "")
-        ])
+        ]
+        sheets.get_sheet1().append_row(row)
+        sheets.invalidate("Sheet1")  # сброс кэша
         return True, nid
     except Exception as e:
         logger.error(f"add_product: {e}")
@@ -173,8 +238,8 @@ def add_product(data: dict) -> tuple[bool, int]:
 
 def update_product_status(row_index: int, new_status: str) -> bool:
     try:
-        w = open_wb().sheet1
-        w.update_cell(row_index, 5, new_status)  # Статус — 5-й столбец
+        sheets.get_sheet1().update_cell(row_index, 5, new_status)
+        sheets.invalidate("Sheet1")
         return True
     except Exception as e:
         logger.error(f"update_product_status: {e}")
@@ -182,26 +247,22 @@ def update_product_status(row_index: int, new_status: str) -> bool:
 
 # ── Агрегаты ──
 def get_aggregates(search: str = "") -> list:
-    try:
-        records = ws("Агрегаты").get_all_records()
-        if search:
-            s = search.lower()
-            records = [r for r in records if s in str(r.get("Модель", "")).lower() or s in str(r.get("Тип", "")).lower()]
-        return records
-    except Exception as e:
-        logger.error(f"get_aggregates: {e}")
-        return []
+    records = sheets.get_all_records("Агрегаты")
+    if search:
+        s = search.lower()
+        records = [r for r in records if s in str(r.get("Модель", "")).lower() or s in str(r.get("Тип", "")).lower()]
+    return records
 
 def add_aggregate(data: dict) -> bool:
     try:
-        w = ws("Агрегаты")
-        nid = next_id(w.get_all_records())
-        w.append_row([
+        nid = next_id(sheets.get_all_records("Агрегаты"))
+        row = [
             str(nid), data.get("type", ""), data.get("model", ""),
             data.get("analog", ""), data.get("features", ""),
             data.get("availability", ""), data.get("price", ""),
             data.get("warranty", "")
-        ])
+        ]
+        sheets.append_row("Агрегаты", row)
         return True
     except Exception as e:
         logger.error(f"add_aggregate: {e}")
@@ -209,23 +270,19 @@ def add_aggregate(data: dict) -> bool:
 
 # ── Сделки ──
 def get_deals(mid: str | None = None) -> list:
-    try:
-        records = ws("Сделки").get_all_records()
-        if mid:
-            return [r for r in records if str(r.get("Менеджер_ID", "")).strip() == str(mid).strip()]
-        return records
-    except Exception as e:
-        logger.error(f"get_deals: {e}")
-        return []
+    records = sheets.get_all_records("Сделки")
+    if mid:
+        return [r for r in records if str(r.get("Менеджер_ID", "")).strip() == str(mid).strip()]
+    return records
 
 def add_deal(data: dict, mid: str) -> bool:
     try:
-        w = ws("Сделки")
-        nid = next_id(w.get_all_records())
-        w.append_row([
+        nid = next_id(sheets.get_all_records("Сделки"))
+        row = [
             str(nid), data.get("client_id", ""), data.get("product_id", ""),
             data.get("amount", ""), data.get("status", "Новая"), now(), str(mid)
-        ])
+        ]
+        sheets.append_row("Сделки", row)
         return True
     except Exception as e:
         logger.error(f"add_deal: {e}")
@@ -233,44 +290,35 @@ def add_deal(data: dict, mid: str) -> bool:
 
 # ── Задачи ──
 def get_tasks(mid: str | None = None, only_today: bool = False) -> list:
-    try:
-        records = ws("Задачи").get_all_records()
-        if mid:
-            records = [r for r in records if str(r.get("Менеджер_ID", "")).strip() == str(mid).strip()]
-        if only_today:
-            t = today()
-            records = [r for r in records if r.get("Дата", "") == t]
-        return records
-    except Exception as e:
-        logger.error(f"get_tasks: {e}")
-        return []
+    records = sheets.get_all_records("Задачи")
+    if mid:
+        records = [r for r in records if str(r.get("Менеджер_ID", "")).strip() == str(mid).strip()]
+    if only_today:
+        t = today()
+        records = [r for r in records if r.get("Дата", "") == t]
+    return records
 
 def add_task(data: dict, mid: str) -> bool:
     try:
-        w = ws("Задачи")
-        nid = next_id(w.get_all_records())
-        w.append_row([
+        nid = next_id(sheets.get_all_records("Задачи"))
+        row = [
             str(nid), str(mid), data.get("description", ""),
             data.get("date", ""), data.get("time", ""),
             data.get("status", "Запланировано"), ""
-        ])
+        ]
+        sheets.append_row("Задачи", row)
         return True
     except Exception as e:
         logger.error(f"add_task: {e}")
         return False
 
 def update_task(task_id: str, new_status: str, mid: str) -> bool:
-    try:
-        w = ws("Задачи")
-        records = w.get_all_records()
-        for i, r in enumerate(records, start=2):
-            if str(r.get("ID", "")) == str(task_id) and str(r.get("Менеджер_ID", "")) == str(mid):
-                w.update_cell(i, 6, new_status)
-                return True
-        return False
-    except Exception as e:
-        logger.error(f"update_task: {e}")
-        return False
+    records = sheets.get_all_records("Задачи")
+    for i, r in enumerate(records, start=2):
+        if str(r.get("ID", "")) == str(task_id) and str(r.get("Менеджер_ID", "")) == str(mid):
+            sheets.update_cell("Задачи", i, 6, new_status)
+            return True
+    return False
 
 # ── Аналитика ──
 def get_analytics(mid: str | None = None) -> dict:
@@ -279,7 +327,7 @@ def get_analytics(mid: str | None = None) -> dict:
         total_rev = sum(float(str(d.get("Сумма", 0)).replace(",", ".") or 0) for d in deals)
         count = len(deals)
         try:
-            calls_all = ws("Звонки").get_all_records()
+            calls_all = sheets.get_all_records("Звонки")
             calls = len([c for c in calls_all if not mid or str(c.get("Менеджер_ID", "")) == str(mid)])
         except Exception:
             calls = 0
@@ -315,7 +363,7 @@ def get_dashboard(mid: str) -> dict:
         "last_clients": last_clients,
     }
 
-# ─────────── HTML-страницы (встроенные) ───────────
+# ─────────── HTML-страницы (оставлены как были) ───────────
 _NAV = """
 <nav class="navbar"><div class="nav-inner"><a class="brand" href="/dashboard">⚡ AutoCRM</a><div class="nav-links"><a href="/dashboard">Дашборд</a><a href="/clients">Клиенты</a><a href="/aggregates">Агрегаты</a><a href="/deals">Сделки</a><a href="/tasks">Задачи</a></div><div class="nav-right"><span id="nav_user"></span><button class="btn-logout" onclick="logout()">Выйти</button></div></div></nav>
 <script>document.getElementById('nav_user').textContent=localStorage.getItem('manager_name')||'';function logout(){localStorage.clear();document.cookie='auth_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;';window.location.href='/';}</script>
@@ -509,7 +557,8 @@ class CRMHandler(BaseHTTPRequestHandler):
         cookie = self.headers.get("Cookie", "")
         for part in cookie.split(";"):
             if "auth_token=" in part.strip():
-                return part.strip().split("=")[-1]
+                token = part.strip().split("=", 1)[-1]
+                return verify_token(token)
         return None
 
     def _body(self):
@@ -530,12 +579,13 @@ class CRMHandler(BaseHTTPRequestHandler):
             return
         register_manager(tg_id, name or f"Менеджер #{tg_id}")
         mname = get_manager_name(tg_id)
+        token = sign_token(tg_id)
         self.send_response(200); self.send_header("Content-Type", "application/json")
-        self.send_header("Set-Cookie", f"auth_token={tg_id}; Path=/; HttpOnly; SameSite=Lax")
+        self.send_header("Set-Cookie", f"auth_token={token}; Path=/; HttpOnly; SameSite=Lax")
         self.end_headers()
         self.wfile.write(json.dumps({"ok": True, "name": mname}, ensure_ascii=False).encode())
 
-# ─────────── Telegram-бот ───────────
+# ─────────── Telegram-бот (без изменений) ───────────
 T_TYPE, T_MODEL, T_PRICE, T_STATUS, T_DESCRIPTION, T_PHOTO = range(6)
 PRODUCT_STATUSES = ["в наличии", "продан", "в ремонте"]
 
@@ -565,7 +615,6 @@ async def _cancel(update, context):
 def _is_cancel(text):
     return text.strip() in ("❌ Отмена", "🔙 Назад", "/cancel")
 
-# ── Старт и хелп ──
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     name = user.full_name or f"Пользователь #{user.id}"
@@ -588,7 +637,6 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown", reply_markup=kb_main()
     )
 
-# ── Обработчики главного меню ──
 async def handle_clients(update, context):
     btn = InlineKeyboardMarkup([[InlineKeyboardButton("Открыть базу клиентов", web_app=WebAppInfo(url=RENDER_URL + "/clients"))]])
     await update.message.reply_text("📋 Нажмите для открытия:", reply_markup=btn)
@@ -719,7 +767,6 @@ async def prod_photo(update, context):
         await update.message.reply_text("❌ Ошибка сохранения", reply_markup=kb_agregat())
     return ConversationHandler.END
 
-# ── Все товары ──
 async def show_all_products(update, context):
     products = get_products()
     if not products:
@@ -752,7 +799,6 @@ async def cb_product_detail(update, context):
         logger.error(f"product detail: {e}")
         await q.edit_message_text(text, parse_mode="Markdown")
 
-# ── Изменение статуса ──
 async def change_status_start(update, context):
     products = get_products()
     if not products:
@@ -786,7 +832,6 @@ async def cb_set_status(update, context):
         await q.edit_message_text("❌ Не удалось обновить статус")
     context.user_data.pop("edit_idx", None)
 
-# ── Поиск товара ──
 async def search_product_ask(update, context):
     await update.message.reply_text("Введите модель или тип:", reply_markup=kb_cancel())
     context.user_data["awaiting_search"] = True
@@ -807,7 +852,6 @@ async def search_product_result(update, context):
     context.user_data["products_cache"] = results[:10]
     await update.message.reply_text(f"🔍 Найдено: *{len(results)}*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(btns))
 
-# ── Главный обработчик текста ──
 async def handle_text(update, context):
     txt = update.message.text.strip()
     if txt == "🗄️ Агрегаты":
