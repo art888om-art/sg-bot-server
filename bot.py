@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 CRM-система для продажи генераторов и стартеров.
-Telegram-бот + веб-интерфейс в стиле React. Версия 13.0 – финальная, с редиректом.
+Telegram-бот + веб-интерфейс в стиле React. Версия 14.0 – Final.
 """
 import os, logging, threading, json
 from datetime import datetime, date
@@ -142,28 +142,6 @@ def add_client(data: dict, mid: str) -> bool:
         logger.error(f"add_client: {e}")
         return False
 
-def update_client(client_id: str, data: dict, mid: str) -> bool:
-    try:
-        w = ws("Клиенты")
-        records = w.get_all_records()
-        for i, r in enumerate(records, start=2):
-            if str(r.get("ID", "")) == client_id and str(r.get("Менеджер_ID", "")) == mid:
-                w.update_cell(i, 2, data.get("name", r.get("Имя", "")))
-                w.update_cell(i, 3, data.get("phone", r.get("Телефон", "")))
-                w.update_cell(i, 4, data.get("auto", r.get("Авто", "")))
-                w.update_cell(i, 5, data.get("vin", r.get("VIN", "")))
-                w.update_cell(i, 6, data.get("unit", r.get("Агрегат", "")))
-                w.update_cell(i, 7, data.get("unit_type", r.get("Тип", "")))
-                w.update_cell(i, 8, data.get("condition", r.get("Состояние", "")))
-                w.update_cell(i, 9, data.get("price", r.get("Цена", "")))
-                w.update_cell(i, 10, data.get("comment", r.get("Комментарий", "")))
-                w.update_cell(i, 11, data.get("status", r.get("Статус", "")))
-                return True
-        return False
-    except Exception as e:
-        logger.error(f"update_client: {e}")
-        return False
-
 # ── Товары (Sheet1) ──
 def get_products(search: str = "") -> list:
     try:
@@ -192,15 +170,6 @@ def add_product(data: dict) -> tuple[bool, int]:
         logger.error(f"add_product: {e}")
         return False, 0
 
-def update_product_status(row_index: int, new_status: str) -> bool:
-    try:
-        w = open_wb().sheet1
-        w.update_cell(row_index, 5, new_status)
-        return True
-    except Exception as e:
-        logger.error(f"update_product_status: {e}")
-        return False
-
 # ── Агрегаты ──
 def get_aggregates(search: str = "") -> list:
     try:
@@ -228,25 +197,6 @@ def add_aggregate(data: dict) -> bool:
         logger.error(f"add_aggregate: {e}")
         return False
 
-def update_aggregate(agg_id: str, data: dict) -> bool:
-    try:
-        w = ws("Агрегаты")
-        records = w.get_all_records()
-        for i, r in enumerate(records, start=2):
-            if str(r.get("ID", "")) == agg_id:
-                w.update_cell(i, 2, data.get("type", r.get("Тип", "")))
-                w.update_cell(i, 3, data.get("model", r.get("Модель", "")))
-                w.update_cell(i, 4, data.get("analog", r.get("Аналог", "")))
-                w.update_cell(i, 5, data.get("features", r.get("Характеристики", "")))
-                w.update_cell(i, 6, data.get("availability", r.get("Наличие", "")))
-                w.update_cell(i, 7, data.get("price", r.get("Цена", "")))
-                w.update_cell(i, 8, data.get("warranty", r.get("Гарантия", "")))
-                return True
-        return False
-    except Exception as e:
-        logger.error(f"update_aggregate: {e}")
-        return False
-
 # ── Сделки ──
 def get_deals(mid: str | None = None) -> list:
     try:
@@ -270,43 +220,6 @@ def add_deal(data: dict, mid: str) -> bool:
         return True
     except Exception as e:
         logger.error(f"add_deal: {e}")
-        return False
-
-def update_deal(deal_id: str, data: dict, mid: str) -> bool:
-    try:
-        w = ws("Сделки")
-        records = w.get_all_records()
-        for i, r in enumerate(records, start=2):
-            if str(r.get("ID", "")) == deal_id and str(r.get("Менеджер_ID", "")) == mid:
-                w.update_cell(i, 2, data.get("name", r.get("Название", "")))
-                w.update_cell(i, 3, data.get("client_id", r.get("Клиент_ID", "")))
-                w.update_cell(i, 4, data.get("product_id", r.get("Товар_ID", "")))
-                w.update_cell(i, 5, data.get("amount", r.get("Сумма", "")))
-                w.update_cell(i, 6, data.get("status", r.get("Статус", "Новый")))
-                w.update_cell(i, 9, data.get("comment", r.get("Комментарий", "")))
-                return True
-        return False
-    except Exception as e:
-        logger.error(f"update_deal: {e}")
-        return False
-
-def move_deal_stage(deal_id: str, direction: int, mid: str) -> bool:
-    stages = ["Новый", "Переговоры", "КП отправлено", "Счёт выставлен", "Оплачено", "Отказ"]
-    try:
-        w = ws("Сделки")
-        records = w.get_all_records()
-        for i, r in enumerate(records, start=2):
-            if str(r.get("ID", "")) == deal_id and str(r.get("Менеджер_ID", "")) == mid:
-                current = r.get("Статус", "Новый")
-                if current in stages:
-                    idx = stages.index(current)
-                    new_idx = idx + direction
-                    if 0 <= new_idx < len(stages):
-                        w.update_cell(i, 6, stages[new_idx])
-                        return True
-        return False
-    except Exception as e:
-        logger.error(f"move_deal_stage: {e}")
         return False
 
 # ── Задачи ──
@@ -431,38 +344,99 @@ input,select,textarea{width:100%;padding:8px 12px;border:1px solid var(--border)
 input:focus,select:focus,textarea:focus{border-color:var(--accent)}
 .toast{position:fixed;bottom:24px;right:24px;z-index:9999;animation:slideIn 0.3s ease}
 @keyframes slideIn{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}
-.spinner{border:3px solid #e2e8f0;border-top:3px solid var(--accent);border-radius:50%;width:32px;height:32px;animation:spin 0.7s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:768px){.sidebar{transform:translateX(-100%)}.sidebar.open{transform:translateX(0)}.main-content{margin-left:0}}
 </style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/js/all.min.js" defer></script>
 """
 
-_NAV = """
-<nav class="sidebar" id="sidebar">
-  <div class="p-4 border-b border-white/20">
-    <h2 class="text-white font-bold text-lg">⚡ CRM Агрегати</h2>
-    <p class="text-white/60 text-xs">Стартери & Генератори</p>
-  </div>
-  <div class="py-2 flex-1 overflow-y-auto" id="nav-links"></div>
-  <div class="p-4 border-t border-white/20">
-    <div class="flex items-center gap-3 text-white/80">
-      <div class="w-8 h-8 rounded-full bg-accent text-white flex items-center justify-center font-bold text-xs" id="user_avatar">М</div>
-      <span class="text-sm" id="user_name"></span>
-    </div>
-    <button onclick="logout()" class="text-white/60 hover:text-white text-xs mt-2 flex items-center gap-1"><i class="fas fa-sign-out-alt"></i> Вийти</button>
-  </div>
-</nav>
-<div class="main-content">
-  <div class="bg-white shadow-sm px-4 py-3 flex items-center justify-between sticky top-0 z-30">
-    <button onclick="document.getElementById('sidebar').classList.toggle('open')" class="md:hidden text-primary text-xl">☰</button>
-    <span class="font-semibold text-primary" id="topbar_name"></span>
-    <button onclick="logout()" class="text-sm text-gray-500 hover:text-danger"><i class="fas fa-sign-out-alt"></i> Вийти</button>
-  </div>
-  <div class="p-4 md:p-6" id="content"></div>
-</div>
-<div id="toast" class="toast" style="display:none"></div>
-<div id="modal-container"></div>
+# Общий JavaScript для всех страниц после входа
+_APP_JS = """
+<script>
+const RENDER_URL = '""" + RENDER_URL + """';
+let currentManager = {id: localStorage.getItem('manager_id'), name: localStorage.getItem('manager_name')};
+const STAGES = ['Новый','Переговоры','КП отправлено','Счёт выставлен','Оплачено','Отказ'];
+function statusBadge(s) {
+  const map = {'Новый':'badge-blue','В обработке':'badge-yellow','Закрыт':'badge-gray','в наличии':'badge-green','продан':'badge-red','в ремонте':'badge-yellow','Новая':'badge-blue','Выполнено':'badge-green','Просрочено':'badge-red','Запланировано':'badge-yellow','Оплачено':'badge-green','Переговоры':'badge-yellow','КП отправлено':'badge-blue','Счёт выставлен':'badge-orange','Отказ':'badge-red'};
+  return '<span class="badge '+ (map[s]||'badge-gray') +'">'+s+'</span>';
+}
+function toast(msg,type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast ' + (type==='error'?'bg-red-600 text-white':'bg-green-600 text-white') + ' px-6 py-3 rounded-xl shadow-xl';
+  t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 3000);
+}
+function logout() {
+  localStorage.clear();
+  document.cookie = 'auth_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;';
+  window.location.href = '/';
+}
+async function fetchAPI(url, method='GET', body) {
+  const opts = {method, headers:{'Content-Type':'application/json'}};
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(url, opts);
+  return r.json();
+}
+function buildNav() {
+  const items = [
+    {id:'dashboard', icon:'fa-th-large', label:'Дашборд'},
+    {id:'catalog', icon:'fa-box', label:'Каталог агрегатів'},
+    {id:'clients', icon:'fa-users', label:'Клієнти'},
+    {id:'deals', icon:'fa-funnel-dollar', label:'Воронка угод'},
+    {id:'scripts', icon:'fa-file-alt', label:'Скрипти продажів'},
+    {id:'objections', icon:'fa-comments', label:'Заперечення'},
+    {id:'nova-poshta', icon:'fa-truck', label:'Нова Пошта'},
+    {id:'tasks', icon:'fa-tasks', label:'Завдання'},
+    {id:'reports', icon:'fa-chart-bar', label:'Звіти'},
+    {id:'ranking', icon:'fa-trophy', label:'Рейтинг'},
+  ];
+  document.getElementById('nav-links').innerHTML = items.map(i => '<button onclick="navigate(\''+i.id+'\')" class="w-full text-left px-4 py-3 flex items-center gap-3 transition-colors text-sm text-white/80 hover:bg-white/10 hover:text-white"><i class="fas '+i.icon+' w-5 text-center"></i> '+i.label+'</button>').join('');
+}
+function navigate(page) {
+  const pages = {
+    dashboard: loadDashboard,
+    catalog: loadCatalog,
+    clients: loadClients,
+    deals: loadDeals,
+    scripts: loadScripts,
+    objections: loadObjections,
+    'nova-poshta': loadNovaPoshta,
+    tasks: loadTasks,
+    reports: loadReports,
+    ranking: loadRanking,
+  };
+  if (pages[page]) pages[page]();
+}
+// Заглушки для страниц (чтобы не падать)
+async function loadCatalog() { document.getElementById('content').innerHTML = '<h1>Каталог агрегатів</h1><p>В розробці</p>'; }
+async function loadClients() { document.getElementById('content').innerHTML = '<h1>Клієнти</h1><p>В розробці</p>'; }
+async function loadDeals() { document.getElementById('content').innerHTML = '<h1>Воронка угод</h1><p>В розробці</p>'; }
+async function loadScripts() { document.getElementById('content').innerHTML = '<h1>Скрипти продажів</h1><p>В розробці</p>'; }
+async function loadObjections() { document.getElementById('content').innerHTML = '<h1>Заперечення</h1><p>В розробці</p>'; }
+async function loadNovaPoshta() { document.getElementById('content').innerHTML = '<h1>Нова Пошта</h1><p>В розробці</p>'; }
+async function loadTasks() { document.getElementById('content').innerHTML = '<h1>Завдання</h1><p>В розробці</p>'; }
+async function loadReports() { document.getElementById('content').innerHTML = '<h1>Звіти</h1><p>В розробці</p>'; }
+async function loadRanking() { document.getElementById('content').innerHTML = '<h1>Рейтинг</h1><p>В розробці</p>'; }
+// Дашборд
+async function loadDashboard() {
+  const d = await fetchAPI('/api/dashboard');
+  document.getElementById('content').innerHTML = '<h1 class="text-2xl font-bold text-primary mb-6">Мій дашборд</h1>'+
+    '<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">'+
+      '<div class="card"><p class="text-gray-500 text-sm">Мої угоди (сьогодні)</p><p class="text-3xl font-bold text-primary">'+d.analytics.total_deals+'</p></div>'+
+      '<div class="card"><p class="text-gray-500 text-sm">Виручка (оплачено)</p><p class="text-3xl font-bold text-success">'+d.analytics.total_revenue.toLocaleString('uk-UA')+' ₴</p></div>'+
+      '<div class="card"><p class="text-gray-500 text-sm">Конверсія</p><p class="text-3xl font-bold text-accent">'+d.analytics.conversion+'%</p></div>'+
+      '<div class="card"><p class="text-gray-500 text-sm">Виручка команди (місяць)</p><p class="text-3xl font-bold text-primary">'+d.team_month_revenue.toLocaleString('uk-UA')+' ₴</p></div>'+
+    '</div>'+
+    '<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">'+
+      '<div class="card"><h3 class="font-bold text-primary mb-3">📋 Мої завдання на сьогодні</h3>'+(d.tasks_today.length ? d.tasks_today.map(t => '<div class="flex items-center gap-2 py-2 border-b text-sm"><i class="fas fa-phone text-accent"></i><span>'+t.Описание+'</span><span class="ml-auto text-gray-400">'+t.Время+'</span></div>').join('') : '<p class="text-gray-400">Немає завдань</p>')+'</div>'+
+      '<div class="card"><h3 class="font-bold text-primary mb-3">🚗 Мої клієнти</h3>'+(d.last_clients.length ? d.last_clients.map(c => '<div class="flex items-center gap-2 py-2 border-b text-sm"><span class="font-medium">'+(c.Имя||'—')+'</span><span class="text-gray-400">'+(c.Авто||'')+'</span><span class="ml-auto">'+statusBadge(c.Статус)+'</span></div>').join('') : '<p class="text-gray-400">Немає клієнтів</p>')+'</div>'+
+    '</div>';
+}
+document.getElementById('user_name').textContent = currentManager.name;
+document.getElementById('topbar_name').textContent = currentManager.name;
+document.getElementById('user_avatar').textContent = currentManager.name[0];
+buildNav();
+loadDashboard();
+</script>
 """
 
 LOGIN_PAGE = _STYLE + """
@@ -505,66 +479,34 @@ loadManagers();
 </script>
 """
 
-DASHBOARD_PAGE = _STYLE + _NAV + """
-<script>
-const RENDER_URL = '""" + RENDER_URL + """';
-let currentManager = {id: localStorage.getItem('manager_id'), name: localStorage.getItem('manager_name')};
-const STAGES = ['Новый','Переговоры','КП отправлено','Счёт выставлен','Оплачено','Отказ'];
-function statusBadge(s) {
-  const map = {'Новый':'badge-blue','В обработке':'badge-yellow','Закрыт':'badge-gray','в наличии':'badge-green','продан':'badge-red','в ремонте':'badge-yellow','Новая':'badge-blue','Выполнено':'badge-green','Просрочено':'badge-red','Запланировано':'badge-yellow','Оплачено':'badge-green','Переговоры':'badge-yellow','КП отправлено':'badge-blue','Счёт выставлен':'badge-orange','Отказ':'badge-red'};
-  return '<span class="badge '+ (map[s]||'badge-gray') +'">'+s+'</span>';
-}
-function logout() {
-  localStorage.clear();
-  document.cookie = 'auth_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;';
-  window.location.href = '/';
-}
-function buildNav() {
-  const items = [
-    {id:'dashboard', icon:'fa-th-large', label:'Дашборд'},
-    {id:'catalog', icon:'fa-box', label:'Каталог агрегатів'},
-    {id:'clients', icon:'fa-users', label:'Клієнти'},
-    {id:'deals', icon:'fa-funnel-dollar', label:'Воронка угод'},
-    {id:'scripts', icon:'fa-file-alt', label:'Скрипти продажів'},
-    {id:'objections', icon:'fa-comments', label:'Заперечення'},
-    {id:'nova-poshta', icon:'fa-truck', label:'Нова Пошта'},
-    {id:'tasks', icon:'fa-tasks', label:'Завдання'},
-    {id:'reports', icon:'fa-chart-bar', label:'Звіти'},
-    {id:'ranking', icon:'fa-trophy', label:'Рейтинг'},
-  ];
-  document.getElementById('nav-links').innerHTML = items.map(i => '<button onclick="navigate(\''+i.id+'\')" class="w-full text-left px-4 py-3 flex items-center gap-3 transition-colors text-sm text-white/80 hover:bg-white/10 hover:text-white"><i class="fas '+i.icon+' w-5 text-center"></i> '+i.label+'</button>').join('');
-}
-async function navigate(page) {
-  if (page === 'dashboard') loadDashboard();
-  // остальные страницы реализованы аналогично, но для краткости здесь опущены
-}
-async function loadDashboard() {
-  const d = await fetchAPI('/api/dashboard');
-  document.getElementById('content').innerHTML = '<h1 class="text-2xl font-bold text-primary mb-6">Мій дашборд</h1>'+
-    '<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">'+
-      '<div class="card"><p class="text-gray-500 text-sm">Мої угоди (сьогодні)</p><p class="text-3xl font-bold text-primary">'+d.analytics.total_deals+'</p></div>'+
-      '<div class="card"><p class="text-gray-500 text-sm">Виручка (оплачено)</p><p class="text-3xl font-bold text-success">'+d.analytics.total_revenue.toLocaleString('uk-UA')+' ₴</p></div>'+
-      '<div class="card"><p class="text-gray-500 text-sm">Конверсія</p><p class="text-3xl font-bold text-accent">'+d.analytics.conversion+'%</p></div>'+
-      '<div class="card"><p class="text-gray-500 text-sm">Виручка команди (місяць)</p><p class="text-3xl font-bold text-primary">'+d.team_month_revenue.toLocaleString('uk-UA')+' ₴</p></div>'+
-    '</div>'+
-    '<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">'+
-      '<div class="card"><h3 class="font-bold text-primary mb-3">📋 Мої завдання на сьогодні</h3>'+(d.tasks_today.length ? d.tasks_today.map(t => '<div class="flex items-center gap-2 py-2 border-b text-sm"><i class="fas fa-phone text-accent"></i><span>'+t.Описание+'</span><span class="ml-auto text-gray-400">'+t.Время+'</span></div>').join('') : '<p class="text-gray-400">Немає завдань</p>')+'</div>'+
-      '<div class="card"><h3 class="font-bold text-primary mb-3">🚗 Мої клієнти</h3>'+(d.last_clients.length ? d.last_clients.map(c => '<div class="flex items-center gap-2 py-2 border-b text-sm"><span class="font-medium">'+(c.Имя||'—')+'</span><span class="text-gray-400">'+(c.Авто||'')+'</span><span class="ml-auto">'+statusBadge(c.Статус)+'</span></div>').join('') : '<p class="text-gray-400">Немає клієнтів</p>')+'</div>'+
-    '</div>';
-}
-document.getElementById('user_name').textContent = currentManager.name;
-document.getElementById('topbar_name').textContent = currentManager.name;
-document.getElementById('user_avatar').textContent = currentManager.name[0];
-buildNav();
-loadDashboard();
-async function fetchAPI(url, method='GET', body) {
-  const opts = {method, headers:{'Content-Type':'application/json'}};
-  if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(url, opts);
-  return r.json();
-}
-</script>
+NAV_PAGE = """
+<nav class="sidebar" id="sidebar">
+  <div class="p-4 border-b border-white/20">
+    <h2 class="text-white font-bold text-lg">⚡ CRM Агрегати</h2>
+    <p class="text-white/60 text-xs">Стартери & Генератори</p>
+  </div>
+  <div class="py-2 flex-1 overflow-y-auto" id="nav-links"></div>
+  <div class="p-4 border-t border-white/20">
+    <div class="flex items-center gap-3 text-white/80">
+      <div class="w-8 h-8 rounded-full bg-accent text-white flex items-center justify-center font-bold text-xs" id="user_avatar">М</div>
+      <span class="text-sm" id="user_name"></span>
+    </div>
+    <button onclick="logout()" class="text-white/60 hover:text-white text-xs mt-2 flex items-center gap-1"><i class="fas fa-sign-out-alt"></i> Вийти</button>
+  </div>
+</nav>
+<div class="main-content">
+  <div class="bg-white shadow-sm px-4 py-3 flex items-center justify-between sticky top-0 z-30">
+    <button onclick="document.getElementById('sidebar').classList.toggle('open')" class="md:hidden text-primary text-xl">☰</button>
+    <span class="font-semibold text-primary" id="topbar_name"></span>
+    <button onclick="logout()" class="text-sm text-gray-500 hover:text-danger"><i class="fas fa-sign-out-alt"></i> Вийти</button>
+  </div>
+  <div class="p-4 md:p-6" id="content"></div>
+</div>
+<div id="toast" class="toast" style="display:none"></div>
+<div id="modal-container"></div>
 """
+
+DASHBOARD_PAGE = _STYLE + NAV_PAGE + _APP_JS
 
 # ─────────── HTTP-сервер ───────────
 class CRMHandler(BaseHTTPRequestHandler):
@@ -581,15 +523,27 @@ class CRMHandler(BaseHTTPRequestHandler):
                 self._redirect("/")
             else:
                 self._html(DASHBOARD_PAGE)
-        elif p == "/clients":
-            if not mid: self._redirect("/"); return
-            self._html(CLIENTS_PAGE)  # предполагается, что CLIENTS_PAGE определён выше (я опустил для краткости, но он строится аналогично)
         elif p == "/api/managers":
             self._json(ws("Менеджеры").get_all_records())
         elif p == "/api/dashboard":
             if not mid: self._json({"error":"Unauthorized"}, 403); return
             self._json(get_dashboard(mid))
-        # остальные API и страницы аналогичны
+        elif p == "/api/clients":
+            if not mid: self._json({"error":"Unauthorized"}, 403); return
+            self._json(get_clients(mid))
+        elif p == "/api/aggregates":
+            self._json(get_aggregates())
+        elif p == "/api/products":
+            self._json(get_products())
+        elif p == "/api/deals":
+            if not mid: self._json({"error":"Unauthorized"}, 403); return
+            self._json(get_deals(mid))
+        elif p == "/api/tasks":
+            if not mid: self._json({"error":"Unauthorized"}, 403); return
+            self._json(get_tasks(mid))
+        elif p == "/api/analytics":
+            if not mid: self._json({"error":"Unauthorized"}, 403); return
+            self._json(get_analytics(mid))
         else:
             self.send_error(404)
 
@@ -599,7 +553,20 @@ class CRMHandler(BaseHTTPRequestHandler):
         mid = self._auth()
         if p == "/api/login":
             self._login(body)
-        # остальные POST-обработчики...
+        elif p == "/api/add_client":
+            if not mid: self._json({"error":"Unauthorized"}, 403); return
+            self._json({"ok": add_client(body, mid)})
+        elif p == "/api/add_aggregate":
+            self._json({"ok": add_aggregate(body)})
+        elif p == "/api/add_deal":
+            if not mid: self._json({"error":"Unauthorized"}, 403); return
+            self._json({"ok": add_deal(body, mid)})
+        elif p == "/api/add_task":
+            if not mid: self._json({"error":"Unauthorized"}, 403); return
+            self._json({"ok": add_task(body, mid)})
+        elif p == "/api/update_task":
+            if not mid: self._json({"error":"Unauthorized"}, 403); return
+            self._json({"ok": update_task(body.get("id",""), body.get("status",""), mid)})
         else:
             self.send_error(404)
 
@@ -639,5 +606,305 @@ class CRMHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps({"ok": True, "name": mname}, ensure_ascii=False).encode())
 
-# ─────────── Telegram-бот (оставлен без изменений) ───────────
-# ... (весь код бота из предыдущих версий, полностью рабочий)
+# ─────────── Telegram-бот ───────────
+T_TYPE, T_MODEL, T_PRICE, T_STATUS, T_DESCRIPTION, T_PHOTO = range(6)
+PRODUCT_STATUSES = ["в наличии", "продан", "в ремонте"]
+
+def kb_main():
+    return ReplyKeyboardMarkup([
+        ["📋 Клиенты", "🗄️ Агрегаты"],
+        ["📜 Скрипты", "📊 Аналитика"],
+        ["🔗 Поиск", "🚚 Нова Пошта"],
+        ["📱 Веб-приложение", "🆘 Помощь"],
+    ], resize_keyboard=True)
+
+def kb_agregat():
+    return ReplyKeyboardMarkup([
+        ["➕ Добавить товар", "📋 Все товары"],
+        ["🔍 Поиск товара", "✏️ Изменить статус"],
+        ["🔙 Назад", "❌ Отмена"],
+    ], resize_keyboard=True)
+
+def kb_cancel():
+    return ReplyKeyboardMarkup([["❌ Отмена"]], resize_keyboard=True, one_time_keyboard=True)
+
+async def _cancel(update, context):
+    context.user_data.clear()
+    await update.message.reply_text("Отменено.", reply_markup=kb_main())
+    return ConversationHandler.END
+
+def _is_cancel(text):
+    return text.strip() in ("❌ Отмена", "🔙 Назад", "/cancel")
+
+async def cmd_start(update, context):
+    user = update.effective_user
+    name = user.full_name or f"Пользователь #{user.id}"
+    register_manager(str(user.id), name)
+    await update.message.reply_text(f"👋 Привет, *{name}*!\n\nДобро пожаловать в AutoCRM!", parse_mode="Markdown", reply_markup=kb_main())
+
+async def cmd_help(update, context):
+    await update.message.reply_text("🆘 *Справка*\n\n📋 *Клиенты* — база в веб\n🗄️ *Агрегаты* — склад\n📜 *Скрипты* — ответы на возражения\n📊 *Аналитика* — дашборд\n🔗 *Поиск* — Avto.pro, Exist.ua\n🚚 *Нова Пошта* — трекинг\n📱 *Веб-приложение* — открыть CRM", parse_mode="Markdown", reply_markup=kb_main())
+
+async def handle_clients(update, context):
+    btn = InlineKeyboardMarkup([[InlineKeyboardButton("Открыть базу клиентов", web_app=WebAppInfo(url=RENDER_URL + "/clients"))]])
+    await update.message.reply_text("📋 Нажмите для открытия:", reply_markup=btn)
+
+async def handle_agregats(update, context):
+    await update.message.reply_text("🗄️ Управление агрегатами:", reply_markup=kb_agregat())
+
+async def handle_scripts(update, context):
+    await update.message.reply_text("📜 *Скрипты продаж*\n\n🔴 «Дорого» — гарантия 12 мес.\n🔴 «Хочу по месту» — отправим НП за 1-2 дня\n🔴 «Не доверяю отправке» — работаем 5+ лет\n🔴 «Подумаю» — товар в дефиците\n🔴 «Если не подойдёт?» — заменим\n🔴 «Есть ли гарантия?» — да, 12 мес.\n🔴 «Скиньте фото» — сделаем фото/видео", parse_mode="Markdown", reply_markup=kb_main())
+
+async def handle_analytics(update, context):
+    btn = InlineKeyboardMarkup([[InlineKeyboardButton("Открыть дашборд", web_app=WebAppInfo(url=RENDER_URL + "/dashboard"))]])
+    mid = str(update.effective_user.id)
+    a = get_analytics(mid)
+    text = f"📊 *Ваша аналитика*\n💰 Выручка всего: *{a['total_revenue']} ₴*\n💰 За месяц: *{a['month_revenue']} ₴*\n📦 Сделок всего: *{a['total_deals']}*\n📦 За месяц: *{a['month_deals']}*\n📞 Звонков: *{a['total_calls']}*\n🎯 Конверсия: *{a['conversion']}%*"
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=btn)
+
+async def handle_search(update, context):
+    btn = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚗 Avto.pro", url="https://avto.pro/")],
+        [InlineKeyboardButton("🔎 Exist.ua", url="https://exist.ua/")],
+    ])
+    await update.message.reply_text("🔗 Выберите сервис:", reply_markup=btn)
+
+async def handle_nova_poshta(update, context):
+    btn = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📦 Трекинг", url="https://tracking.novaposhta.ua/#/uk")],
+        [InlineKeyboardButton("⏱ Срок доставки", url="https://forms.novapost.world/delivery_time/")],
+    ])
+    await update.message.reply_text("🚚 Нова Пошта:", reply_markup=btn)
+
+async def handle_webapp(update, context):
+    btn = InlineKeyboardMarkup([[InlineKeyboardButton("Открыть CRM", web_app=WebAppInfo(url=RENDER_URL))]])
+    await update.message.reply_text("📱 Нажмите кнопку:", reply_markup=btn)
+
+# ── Добавление товара ──
+async def prod_start(update, context):
+    await update.message.reply_text("Тип товара:", reply_markup=ReplyKeyboardMarkup([["Генератор", "Стартер"], ["❌ Отмена"]], resize_keyboard=True, one_time_keyboard=True))
+    return T_TYPE
+
+async def prod_type(update, context):
+    txt = update.message.text.strip()
+    if _is_cancel(txt): return await _cancel(update, context)
+    if txt not in ("Генератор", "Стартер"):
+        await update.message.reply_text("Выберите: Генератор или Стартер")
+        return T_TYPE
+    context.user_data["p_type"] = txt
+    await update.message.reply_text("Введите модель:", reply_markup=kb_cancel())
+    return T_MODEL
+
+async def prod_model(update, context):
+    txt = update.message.text.strip()
+    if _is_cancel(txt): return await _cancel(update, context)
+    context.user_data["p_model"] = txt
+    await update.message.reply_text("Цена (грн, число):", reply_markup=kb_cancel())
+    return T_PRICE
+
+async def prod_price(update, context):
+    txt = update.message.text.strip()
+    if _is_cancel(txt): return await _cancel(update, context)
+    if not txt.isdigit():
+        await update.message.reply_text("Введите целое число")
+        return T_PRICE
+    context.user_data["p_price"] = txt
+    await update.message.reply_text("Статус:", reply_markup=ReplyKeyboardMarkup([[s] for s in PRODUCT_STATUSES] + [["❌ Отмена"]], resize_keyboard=True, one_time_keyboard=True))
+    return T_STATUS
+
+async def prod_status(update, context):
+    txt = update.message.text.strip()
+    if _is_cancel(txt): return await _cancel(update, context)
+    if txt not in PRODUCT_STATUSES:
+        await update.message.reply_text("Выберите из предложенных")
+        return T_STATUS
+    context.user_data["p_status"] = txt
+    await update.message.reply_text("Описание (или «нет»):", reply_markup=kb_cancel())
+    return T_DESCRIPTION
+
+async def prod_description(update, context):
+    txt = update.message.text.strip()
+    if _is_cancel(txt): return await _cancel(update, context)
+    context.user_data["p_desc"] = "" if txt.lower() in ("нет", "-", "no") else txt
+    await update.message.reply_text("Отправьте фото товара (или «нет»):", reply_markup=kb_cancel())
+    return T_PHOTO
+
+async def prod_photo(update, context):
+    txt = update.message.text.strip() if update.message.text else ""
+    if _is_cancel(txt): return await _cancel(update, context)
+    photo_id = ""
+    if update.message.photo:
+        photo_id = update.message.photo[-1].file_id
+    elif txt.lower() not in ("нет", "-", "no", ""):
+        await update.message.reply_text("Отправьте фото или напишите «нет»")
+        return T_PHOTO
+    d = context.user_data
+    ok, nid = add_product({"type": d.get("p_type", ""), "model": d.get("p_model", ""), "price": d.get("p_price", ""), "status": d.get("p_status", "в наличии"), "description": d.get("p_desc", ""), "photo_id": photo_id})
+    context.user_data.clear()
+    if ok:
+        await update.message.reply_text(f"✅ Товар *{d['p_model']}* добавлен (ID {nid})", parse_mode="Markdown", reply_markup=kb_agregat())
+    else:
+        await update.message.reply_text("❌ Ошибка сохранения", reply_markup=kb_agregat())
+    return ConversationHandler.END
+
+# ── Все товары, изменение статуса, поиск ──
+async def show_all_products(update, context):
+    products = get_products()
+    if not products:
+        await update.message.reply_text("📭 Склад пуст.", reply_markup=kb_agregat())
+        return
+    btns = []
+    for i, p in enumerate(products[:15]):
+        label = f"{p.get('Тип','?')} {p.get('Модель','?')} — {p.get('Цена','')}₴ [{p.get('Статус','')}]"
+        btns.append([InlineKeyboardButton(label[:64], callback_data=f"pd_{i}")])
+    context.user_data["products_cache"] = products[:15]
+    await update.message.reply_text(f"📋 Товаров: *{len(products)}*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(btns))
+
+async def cb_product_detail(update, context):
+    q = update.callback_query
+    await q.answer()
+    idx = int(q.data.split("_")[1])
+    products = context.user_data.get("products_cache", [])
+    if idx >= len(products):
+        await q.edit_message_text("Товар не найден")
+        return
+    p = products[idx]
+    text = f"*{p.get('Тип','')} — {p.get('Модель','')}*\nЦена: *{p.get('Цена','')} ₴*\nСтатус: {p.get('Статус','')}\nОписание: {p.get('Описание','—')}"
+    photo = p.get("Фото_ID", "")
+    try:
+        if photo:
+            await context.bot.send_photo(chat_id=q.message.chat_id, photo=photo, caption=text, parse_mode="Markdown")
+        else:
+            await q.edit_message_text(text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"product detail: {e}")
+        await q.edit_message_text(text, parse_mode="Markdown")
+
+async def change_status_start(update, context):
+    products = get_products()
+    if not products:
+        await update.message.reply_text("Нет товаров.")
+        return
+    btns = [[InlineKeyboardButton(f"{p.get('Тип','?')} {p.get('Модель','?')} [{p.get('Статус','')}]"[:64], callback_data=f"chs_{i}")] for i, p in enumerate(products[:15])]
+    context.user_data["products_cache"] = products[:15]
+    await update.message.reply_text("Выберите товар:", reply_markup=InlineKeyboardMarkup(btns))
+
+async def cb_change_status_select(update, context):
+    q = update.callback_query
+    await q.answer()
+    idx = int(q.data.split("_")[1])
+    context.user_data["edit_idx"] = idx
+    btns = [[InlineKeyboardButton(s, callback_data=f"sts_{s}")] for s in PRODUCT_STATUSES]
+    await q.edit_message_text("Новый статус:", reply_markup=InlineKeyboardMarkup(btns))
+
+async def cb_set_status(update, context):
+    q = update.callback_query
+    await q.answer()
+    new_status = q.data[4:]
+    idx = context.user_data.get("edit_idx")
+    products = context.user_data.get("products_cache", [])
+    if idx is None or idx >= len(products):
+        await q.edit_message_text("Ошибка сессии")
+        return
+    ok = update_product_status(idx + 2, new_status)
+    if ok:
+        await q.edit_message_text(f"✅ Статус изменён на *{new_status}*", parse_mode="Markdown")
+    else:
+        await q.edit_message_text("❌ Не удалось обновить статус")
+    context.user_data.pop("edit_idx", None)
+
+async def search_product_ask(update, context):
+    await update.message.reply_text("Введите модель или тип:", reply_markup=kb_cancel())
+    context.user_data["awaiting_search"] = True
+
+async def search_product_result(update, context):
+    if not context.user_data.get("awaiting_search"):
+        return
+    txt = update.message.text.strip()
+    context.user_data.pop("awaiting_search", None)
+    if _is_cancel(txt):
+        await update.message.reply_text("Отменено.", reply_markup=kb_agregat())
+        return
+    results = get_products(search=txt)
+    if not results:
+        await update.message.reply_text("🔍 Ничего не найдено.", reply_markup=kb_agregat())
+        return
+    btns = [[InlineKeyboardButton(f"{p.get('Тип','?')} {p.get('Модель','?')} — {p.get('Цена','')}₴"[:64], callback_data=f"pd_{i}")] for i, p in enumerate(results[:10])]
+    context.user_data["products_cache"] = results[:10]
+    await update.message.reply_text(f"🔍 Найдено: *{len(results)}*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(btns))
+
+async def handle_text(update, context):
+    txt = update.message.text.strip()
+    if txt == "🗄️ Агрегаты":
+        await handle_agregats(update, context)
+    elif txt == "📋 Клиенты":
+        await handle_clients(update, context)
+    elif txt == "📜 Скрипты":
+        await handle_scripts(update, context)
+    elif txt == "📊 Аналитика":
+        await handle_analytics(update, context)
+    elif txt == "🔗 Поиск":
+        await handle_search(update, context)
+    elif txt == "🚚 Нова Пошта":
+        await handle_nova_poshta(update, context)
+    elif txt == "📱 Веб-приложение":
+        await handle_webapp(update, context)
+    elif txt == "🆘 Помощь":
+        await cmd_help(update, context)
+    elif txt == "📋 Все товары":
+        await show_all_products(update, context)
+    elif txt == "✏️ Изменить статус":
+        await change_status_start(update, context)
+    elif txt == "🔍 Поиск товара":
+        await search_product_ask(update, context)
+    elif txt in ("🔙 Назад", "❌ Отмена"):
+        context.user_data.clear()
+        await update.message.reply_text("Главное меню:", reply_markup=kb_main())
+    else:
+        if context.user_data.get("awaiting_search"):
+            await search_product_result(update, context)
+        else:
+            await update.message.reply_text("Используйте кнопки меню.", reply_markup=kb_main())
+
+# ─────────── Запуск ───────────
+def run_web():
+    httpd = HTTPServer(("0.0.0.0", WEB_PORT), CRMHandler)
+    logger.info(f"Веб-сервер на порту {WEB_PORT}")
+    httpd.serve_forever()
+
+def main():
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN не задан!")
+        return
+    threading.Thread(target=run_web, daemon=True).start()
+
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    add_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(r"^➕ Добавить товар$"), prod_start)],
+        states={
+            T_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, prod_type)],
+            T_MODEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, prod_model)],
+            T_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, prod_price)],
+            T_STATUS: [MessageHandler(filters.TEXT & ~filters.COMMAND, prod_status)],
+            T_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, prod_description)],
+            T_PHOTO: [MessageHandler(filters.PHOTO, prod_photo), MessageHandler(filters.TEXT & ~filters.COMMAND, prod_photo)],
+        },
+        fallbacks=[CommandHandler("cancel", _cancel), MessageHandler(filters.Regex(r"^❌ Отмена$"), _cancel)],
+        allow_reentry=True,
+    )
+
+    app.add_handler(add_conv)
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("cancel", _cancel))
+    app.add_handler(CallbackQueryHandler(cb_product_detail, pattern=r"^pd_\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_change_status_select, pattern=r"^chs_\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_set_status, pattern=r"^sts_"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    logger.info("Бот запущен...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
