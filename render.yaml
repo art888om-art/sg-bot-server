@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: crm-bot
+    runtime: docker
+    region: frankfurt
+    plan: starter
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health/live
+    autoDeploy: true
+    envVars:
+      - key: ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: BOT_MODE
+        value: webhook
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 8000
+      - key: BOT_TOKEN
+        sync: false
+      - key: WEBHOOK_BASE_URL
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: GOOGLE_SHEET_URL
+        sync: false
+      - key: GOOGLE_CREDENTIALS_FILE
+        value: /etc/secrets/google_key.json
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_TTL_DAYS
+        value: 7
+      - key: OWNER_IDS
+        sync: false
+      - key: NOVA_POSHTA_API_KEY
+        sync: false
+      - key: SHEETS_CACHE_TTL_SECONDS
+        value: 30

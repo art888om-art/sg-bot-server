@@ -1,0 +1,40 @@
+{% extends "_base.html" %}
+{% block title %}Дашборд — AutoCRM{% endblock %}
+{% block content %}
+<h1 class="page-title">📊 Дашборд</h1>
+<section class="kpi-grid">
+  <div class="kpi-card">
+    <span class="kpi-label">Выручка за месяц</span>
+    <span class="kpi-value">{{ "{:,.0f}".format(overview.month_revenue).replace(',', ' ') }} ₴</span>
+  </div>
+  <div class="kpi-card">
+    <span class="kpi-label">Сделок за месяц</span>
+    <span class="kpi-value">{{ overview.month_deals }}</span>
+  </div>
+  <div class="kpi-card">
+    <span class="kpi-label">Всего сделок</span>
+    <span class="kpi-value">{{ overview.total_deals }}</span>
+  </div>
+  <div class="kpi-card">
+    <span class="kpi-label">Закрыто</span>
+    <span class="kpi-value">{{ overview.closed_deals }}</span>
+  </div>
+</section>
+
+<section class="card">
+  <h2>📝 Задачи на сегодня</h2>
+  {% if tasks_today %}
+    <ul class="task-list">
+      {% for t in tasks_today %}
+        <li>
+          <strong>{{ t.description }}</strong>
+          {% if t.time %}<span class="muted">{{ t.time.strftime('%H:%M') }}</span>{% endif %}
+          <span class="badge status-{{ t.status.value | lower }}">{{ t.status.value }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">На сегодня задач нет.</p>
+  {% endif %}
+</section>
+{% endblock %}

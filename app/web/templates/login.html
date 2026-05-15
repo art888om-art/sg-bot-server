@@ -1,0 +1,35 @@
+{% extends "_base.html" %}
+{% block title %}Вход — AutoCRM{% endblock %}
+{% block nav %}{% endblock %}
+{% block content %}
+<section class="login-card">
+  <h1>Вход в AutoCRM</h1>
+  <p>Отправь команду <code>/login</code> в Telegram-боте — получишь одноразовый код. Введи его ниже:</p>
+  <form id="loginForm" autocomplete="off">
+    <label for="code">Код из бота</label>
+    <input id="code" name="code" required minlength="20" maxlength="100" autocomplete="off">
+    <button class="btn btn-primary" type="submit">Войти</button>
+  </form>
+</section>
+<script>
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const code = document.getElementById('code').value.trim();
+  try {
+    const res = await fetch('/api/v1/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code}),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      toast(data.detail || 'Неверный код', 'error');
+      return;
+    }
+    window.location.href = '/dashboard';
+  } catch (err) {
+    toast('Сеть недоступна', 'error');
+  }
+});
+</script>
+{% endblock %}
