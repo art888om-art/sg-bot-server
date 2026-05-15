@@ -147,22 +147,22 @@ class CRMHTTPHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     # ----- АВТОРИЗАЦИЯ -----
-    def _api_login(self):
+   def _api_login(self):
         data = self._get_json_body()
         tg_id = str(data.get("tg_id", "")).strip()
         password = data.get("password", "")
         try:
             managers_ws = client.open_by_url(SHEET_URL).worksheet("Менеджеры")
             records = managers_ws.get_all_records()
-            for r in records:
-                if str(r.get("Telegram_ID", "")).strip() == tg_id and r.get("Пароль", "") == password:
-                    self.send_response(200)
-                    self.send_header("Content-type", "application/json")
-                    self.send_header("Set-Cookie", f"auth_token={tg_id}; Path=/")
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"ok": True, "name": r["Имя"]}).encode())
-                    return
-            self._send_json({"ok": False, "error": "Неверный ID или пароль"}, 401)
+            # Отладочный вывод: возвращаем заголовки и первую запись
+            debug_info = {
+                "headers": managers_ws.row_values(1),
+                "first_record": records[0] if records else None,
+                "input_tg_id": tg_id,
+                "input_password": password
+            }
+            self._send_json({"ok": False, "error": "DEBUG", "debug": debug_info}, 200)
+            return
         except Exception as e:
             logger.error(f"Login error: {e}")
             self.send_error(500)
