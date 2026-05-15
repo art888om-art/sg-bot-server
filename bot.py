@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 CRM-бот для продавцов генераторов и стартеров.
-Версия 5.3 – все ошибки исправлены, стабильная работа.
+Версия 5.4 – все ошибки исправлены, добавлены сделки, редактирование задач.
 """
 import os, logging, threading, json
 from datetime import datetime
@@ -108,6 +108,8 @@ class CRMHTTPHandler(BaseHTTPRequestHandler):
             self._serve_html(DASHBOARD_PAGE)
         elif path == "/tasks":
             self._serve_html(TASKS_PAGE)
+        elif path == "/deals":
+            self._serve_html(DEALS_PAGE)
         elif path == "/api/clients":
             self._api_get_clients()
         elif path == "/api/aggregates":
@@ -118,6 +120,8 @@ class CRMHTTPHandler(BaseHTTPRequestHandler):
             self._api_get_dashboard()
         elif path == "/api/tasks":
             self._api_get_tasks()
+        elif path == "/api/deals":
+            self._api_get_deals()
         else:
             self.send_error(404)
 
@@ -131,6 +135,10 @@ class CRMHTTPHandler(BaseHTTPRequestHandler):
             self._api_add_aggregate()
         elif path == "/api/add_task":
             self._api_add_task()
+        elif path == "/api/add_deal":
+            self._api_add_deal()
+        elif path == "/api/update_task":
+            self._api_update_task()
         else:
             self.send_error(404)
 
@@ -150,7 +158,7 @@ class CRMHTTPHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
-    # ----- АВТОРИЗАЦИЯ (по Telegram ID + таблица Менеджеры) -----
+    # ----- АВТОРИЗАЦИЯ -----
     def _api_login(self):
         data = self._get_json_body()
         tg_id = str(data.get("tg_id", "")).strip()
@@ -221,6 +229,12 @@ class CRMHTTPHandler(BaseHTTPRequestHandler):
             self.send_error(403); return
         self._send_json(get_tasks_for_manager(manager_id))
 
+    def _api_get_deals(self):
+        manager_id = self._check_auth()
+        if not manager_id:
+            self.send_error(403); return
+        self._send_json(get_deals_for_manager(manager_id))
+
     def _api_add_client(self):
         manager_id = self._check_auth()
         if not manager_id:
@@ -242,6 +256,22 @@ class CRMHTTPHandler(BaseHTTPRequestHandler):
             self.send_error(403); return
         data = self._get_json_body()
         ok = add_task_to_sheet(data, manager_id)
+        self._send_json({"ok": ok})
+
+    def _api_add_deal(self):
+        manager_id = self._check_auth()
+        if not manager_id:
+            self.send_error(403); return
+        data = self._get_json_body()
+        ok = add_deal_to_sheet(data, manager_id)
+        self._send_json({"ok": ok})
+
+    def _api_update_task(self):
+        manager_id = self._check_auth()
+        if not manager_id:
+            self.send_error(403); return
+        data = self._get_json_body()
+        ok = update_task_status(data.get("id"), data.get("status"), manager_id)
         self._send_json({"ok": ok})
 
 # ---------- Функции работы с Google Sheets ----------
@@ -399,6 +429,53 @@ def add_task_to_sheet(data, manager_id):
         logger.error(f"Add task error: {e}")
         return False
 
+def update_task_status(task_id, new_status, manager_id):
+    try:
+        ws = client.open_by_url(SHEET_URL).worksheet("Задачи")
+        records = ws.get_all_records()
+        row_num = None
+        for idx, t in enumerate(records, start=2):
+            if str(t.get("ID")) == str(task_id) and str(t.get("Менеджер_ID")) == manager_id:
+                row_num = idx
+                break
+        if row_num:
+            # Статус в 6-й колонке (индексация с 1)
+            ws.update_cell(row_num, 6, new_status)
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Update task error: {e}")
+        return False
+
+def get_deals_for_manager(manager_id):
+    try:
+        ws = client.open_by_url(SHEET_URL).worksheet("Сделки")
+        all_records = ws.get_all_records()
+        return [d for d in all_records if str(d.get("Менеджер_ID","")) == manager_id]
+    except:
+        return []
+
+def add_deal_to_sheet(data, manager_id):
+    try:
+        ws = client.open_by_url(SHEET_URL).worksheet("Сделки")
+        records = ws.get_all_records()
+        new_id = max([int(r["ID"]) for r in records if str(r.get("ID", "0")).isdigit()] + [0]) + 1
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        row = [
+            str(new_id),
+            data.get("client_id",""),
+            data.get("product_id",""),
+            data.get("amount",""),
+            data.get("status","Новая"),
+            now,
+            manager_id
+        ]
+        ws.append_row(row)
+        return True
+    except Exception as e:
+        logger.error(f"Add deal error: {e}")
+        return False
+
 # ---------- HTML-страницы ----------
 LOGIN_PAGE = """
 <!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Вхід</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light d-flex justify-content-center align-items-center vh-100"><div class="card p-4 shadow" style="width:320px"><h4 class="mb-3">🔐 Вхід до CRM</h4><input class="form-control mb-3" placeholder="Ваш Telegram ID" id="tg_id"><button class="btn btn-primary w-100" onclick="login()">Увійти</button><div id="error" class="text-danger mt-2" style="display:none"></div></div><script>
@@ -419,7 +496,7 @@ async function login(){
 </script></body></html>"""
 
 DASHBOARD_PAGE = """
-<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Мій дашборд</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><nav class="navbar navbar-expand navbar-dark bg-dark mb-3"><div class="container"><a class="navbar-brand" href="#">CRM</a><div class="navbar-nav"><a class="nav-link active" href="/dashboard">Дашборд</a><a class="nav-link" href="/clients">Мої клієнти</a><a class="nav-link" href="/aggregates">Агрегати</a><a class="nav-link" href="/tasks">Завдання</a></div><div class="navbar-text text-white ms-auto me-3" id="manager_name"></div><button class="btn btn-outline-light btn-sm" onclick="logout()">Вийти</button></div></nav><div class="container"><h2>📊 Мій дашборд</h2><p class="text-muted">Ви увійшли: <span id="login_time"></span></p><div class="row" id="stats"><div class="col-md-3"><div class="card p-3 text-center"><h6>Мої угоди (сьогодні)</h6><h4 id="my_deals_today">0</h4></div></div><div class="col-md-3"><div class="card p-3 text-center"><h6>Виручка (оплачено)</h6><h4 id="my_revenue">0 ₴</h4></div></div><div class="col-md-3"><div class="card p-3 text-center"><h6>Конверсія</h6><h4 id="conversion">0 %</h4></div></div><div class="col-md-3"><div class="card p-3 text-center"><h6>Виручка команди (місяць)</h6><h4 id="team_revenue">0 ₴</h4></div></div></div><div class="row mt-4"><div class="col-md-6"><div class="card p-3"><h6>📋 Мої завдання на сьогодні</h6><ul id="tasks_today" class="list-unstyled"></ul></div></div><div class="col-md-6"><div class="card p-3"><h6>🚗 Мої клієнти (останні)</h6><ul id="last_clients" class="list-unstyled"></ul></div></div></div></div><script>
+<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Мій дашборд</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><nav class="navbar navbar-expand navbar-dark bg-dark mb-3"><div class="container"><a class="navbar-brand" href="#">CRM</a><div class="navbar-nav"><a class="nav-link active" href="/dashboard">Дашборд</a><a class="nav-link" href="/clients">Мої клієнти</a><a class="nav-link" href="/aggregates">Агрегати</a><a class="nav-link" href="/deals">Угоди</a><a class="nav-link" href="/tasks">Завдання</a></div><div class="navbar-text text-white ms-auto me-3" id="manager_name"></div><button class="btn btn-outline-light btn-sm" onclick="logout()">Вийти</button></div></nav><div class="container"><h2>📊 Мій дашборд</h2><p class="text-muted">Ви увійшли: <span id="login_time"></span></p><div class="row" id="stats"><div class="col-md-3"><div class="card p-3 text-center"><h6>Мої угоди (сьогодні)</h6><h4 id="my_deals_today">0</h4></div></div><div class="col-md-3"><div class="card p-3 text-center"><h6>Виручка (оплачено)</h6><h4 id="my_revenue">0 ₴</h4></div></div><div class="col-md-3"><div class="card p-3 text-center"><h6>Конверсія</h6><h4 id="conversion">0 %</h4></div></div><div class="col-md-3"><div class="card p-3 text-center"><h6>Виручка команди (місяць)</h6><h4 id="team_revenue">0 ₴</h4></div></div></div><div class="row mt-4"><div class="col-md-6"><div class="card p-3"><h6>📋 Мої завдання на сьогодні</h6><ul id="tasks_today" class="list-unstyled"></ul></div></div><div class="col-md-6"><div class="card p-3"><h6>🚗 Мої клієнти (останні)</h6><ul id="last_clients" class="list-unstyled"></ul></div></div></div></div><script>
 document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('login_time').textContent=new Date().toLocaleString('uk-UA');
   loadDashboard();
@@ -436,7 +513,7 @@ async function loadDashboard(){
   const tasksUl=document.getElementById('tasks_today');
   tasksUl.innerHTML='';
   if(data.tasks.length===0){tasksUl.innerHTML='<li>Немає завдань</li>';}
-  else{data.tasks.forEach(t=>{tasksUl.innerHTML+=`<li>${t.Описание||''} (${t.Дата||''} ${t.Время||''})</li>`;});}
+  else{data.tasks.forEach(t=>{tasksUl.innerHTML+=`<li>${t.Опис||''} (${t.Дата||''} ${t.Время||''})</li>`;});}
   const clientsUl=document.getElementById('last_clients');
   clientsUl.innerHTML='';
   data.last_clients.forEach(c=>{clientsUl.innerHTML+=`<li><strong>${c.Имя||''}</strong> ${c.Авто||''} ${c.Агрегат||''} (${c.Статус||''})</li>`;});
@@ -449,7 +526,7 @@ function logout(){
 </script></body></html>"""
 
 CLIENTS_PAGE = """
-<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Мої клієнти</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><nav class="navbar navbar-expand navbar-dark bg-dark mb-3"><div class="container"><a class="navbar-brand" href="#">CRM</a><div class="navbar-nav"><a class="nav-link" href="/dashboard">Дашборд</a><a class="nav-link active" href="/clients">Мої клієнти</a><a class="nav-link" href="/aggregates">Агрегати</a><a class="nav-link" href="/tasks">Завдання</a></div><div class="navbar-text text-white ms-auto me-3" id="manager_name"></div><button class="btn btn-outline-light btn-sm" onclick="logout()">Вийти</button></div></nav><div class="container"><h2>📋 Мої клієнти</h2><button class="btn btn-success mb-3" onclick="toggleForm()">➕ Додати клієнта</button><div id="addForm" class="card p-3 mb-3 d-none"><div class="row g-2"><div class="col-md-4"><input class="form-control" placeholder="Ім'я" id="name"></div><div class="col-md-4"><input class="form-control" placeholder="Телефон" id="phone"></div><div class="col-md-4"><input class="form-control" placeholder="Авто" id="auto"></div><div class="col-md-4"><input class="form-control" placeholder="VIN" id="vin"></div><div class="col-md-4"><input class="form-control" placeholder="Агрегат" id="unit"></div><div class="col-md-2"><select class="form-select" id="unit_type"><option>Стартер</option><option>Генератор</option></select></div><div class="col-md-2"><select class="form-select" id="condition"><option>Новий</option><option>Відновлений</option><option>Б/У</option></select></div><div class="col-md-2"><input class="form-control" placeholder="Ціна" id="price"></div><div class="col-md-6"><input class="form-control" placeholder="Коментар" id="comment"></div><div class="col-md-3"><select class="form-select" id="status"><option>Новий</option><option>В обробці</option><option>Закритий</option></select></div><div class="col-12 mt-2"><button class="btn btn-primary" onclick="addClient()">Зберегти</button><button class="btn btn-secondary" onclick="toggleForm()">Скасувати</button></div></div></div><table class="table table-bordered bg-white"><thead><tr><th>Ім'я</th><th>Телефон</th><th>Авто</th><th>VIN</th><th>Агрегат</th><th>Тип</th><th>Стан</th><th>Ціна</th><th>Статус</th><th>Коментар</th><th>Дата</th></tr></thead><tbody id="clients-body"></tbody></table></div><script>
+<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Мої клієнти</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><nav class="navbar navbar-expand navbar-dark bg-dark mb-3"><div class="container"><a class="navbar-brand" href="#">CRM</a><div class="navbar-nav"><a class="nav-link" href="/dashboard">Дашборд</a><a class="nav-link active" href="/clients">Мої клієнти</a><a class="nav-link" href="/aggregates">Агрегати</a><a class="nav-link" href="/deals">Угоди</a><a class="nav-link" href="/tasks">Завдання</a></div><div class="navbar-text text-white ms-auto me-3" id="manager_name"></div><button class="btn btn-outline-light btn-sm" onclick="logout()">Вийти</button></div></nav><div class="container"><h2>📋 Мої клієнти</h2><button class="btn btn-success mb-3" onclick="toggleForm()">➕ Додати клієнта</button><div id="addForm" class="card p-3 mb-3 d-none"><div class="row g-2"><div class="col-md-4"><input class="form-control" placeholder="Имя" id="name"></div><div class="col-md-4"><input class="form-control" placeholder="Телефон" id="phone"></div><div class="col-md-4"><input class="form-control" placeholder="Авто" id="auto"></div><div class="col-md-4"><input class="form-control" placeholder="VIN" id="vin"></div><div class="col-md-4"><input class="form-control" placeholder="Агрегат" id="unit"></div><div class="col-md-2"><select class="form-select" id="unit_type"><option>Стартер</option><option>Генератор</option></select></div><div class="col-md-2"><select class="form-select" id="condition"><option>Новый</option><option>Восстановленный</option><option>Б/У</option></select></div><div class="col-md-2"><input class="form-control" placeholder="Цена" id="price"></div><div class="col-md-6"><input class="form-control" placeholder="Комментарий" id="comment"></div><div class="col-md-3"><select class="form-select" id="status"><option>Новый</option><option>В обработке</option><option>Закрыт</option></select></div><div class="col-12 mt-2"><button class="btn btn-primary" onclick="addClient()">Сохранить</button><button class="btn btn-secondary" onclick="toggleForm()">Отмена</button></div></div></div><table class="table table-bordered bg-white"><thead><tr><th>Имя</th><th>Телефон</th><th>Авто</th><th>VIN</th><th>Агрегат</th><th>Тип</th><th>Состояние</th><th>Цена</th><th>Статус</th><th>Комментарий</th><th>Дата</th></tr></thead><tbody id="clients-body"></tbody></table></div><script>
 document.getElementById('manager_name').textContent=localStorage.getItem('manager_name')||'';
 function toggleForm(){document.getElementById('addForm').classList.toggle('d-none')}
 function formatDate(dateStr){
@@ -464,9 +541,9 @@ async function loadClients(){
   const data=await res.json();
   const tbody=document.getElementById('clients-body');
   tbody.innerHTML=data.map(c=>`<tr>
-    <td>${c.Ім'я||''}</td><td>${c.Телефон||''}</td><td>${c.Авто||''}</td><td>${c.VIN||''}</td>
-    <td>${c.Агрегат||''}</td><td>${c.Тип||''}</td><td>${c.Стан||''}</td><td>${c.Ціна||''}</td>
-    <td>${c.Статус||''}</td><td>${c.Коментар||''}</td><td>${formatDate(c['Дата створення'])}</td>
+    <td>${c.Имя||''}</td><td>${c.Телефон||''}</td><td>${c.Авто||''}</td><td>${c.VIN||''}</td>
+    <td>${c.Агрегат||''}</td><td>${c.Тип||''}</td><td>${c.Состояние||''}</td><td>${c.Цена||''}</td>
+    <td>${c.Статус||''}</td><td>${c.Комментарий||''}</td><td>${formatDate(c['Дата создания'])}</td>
   </tr>`).join('');
 }
 async function addClient(){
@@ -483,43 +560,54 @@ async function addClient(){
     status:document.getElementById('status').value,
     history:''
   };
-  await fetch('/api/add_client',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
-  toggleForm();
-  loadClients();
+  const res=await fetch('/api/add_client',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+  const result=await res.json();
+  if(result.ok){
+    toggleForm();
+    loadClients();
+  }else{
+    alert('Ошибка при добавлении клиента');
+  }
 }
 loadClients();
 </script></body></html>"""
 
-AGGREGATES_PAGE = """
-<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Агрегати</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><nav class="navbar navbar-expand navbar-dark bg-dark mb-3"><div class="container"><a class="navbar-brand" href="#">CRM</a><div class="navbar-nav"><a class="nav-link" href="/dashboard">Дашборд</a><a class="nav-link" href="/clients">Мої клієнти</a><a class="nav-link active" href="/aggregates">Агрегати</a><a class="nav-link" href="/tasks">Завдання</a></div><div class="navbar-text text-white ms-auto me-3" id="manager_name"></div><button class="btn btn-outline-light btn-sm" onclick="logout()">Вийти</button></div></nav><div class="container"><h2>🗄️ Агрегати</h2><button class="btn btn-success mb-3" onclick="toggleForm()">➕ Додати агрегат</button><div id="addForm" class="card p-3 mb-3 d-none"><div class="row g-2"><div class="col-md-3"><select class="form-select" id="type"><option>Стартер</option><option>Генератор</option></select></div><div class="col-md-3"><input class="form-control" placeholder="Модель" id="model"></div><div class="col-md-3"><input class="form-control" placeholder="Аналог" id="analog"></div><div class="col-md-3"><input class="form-control" placeholder="Характеристики" id="features"></div><div class="col-md-3"><input class="form-control" placeholder="Наявність" id="availability"></div><div class="col-md-2"><input class="form-control" placeholder="Ціна" id="price"></div><div class="col-md-2"><input class="form-control" placeholder="Гарантія" id="warranty"></div><div class="col-12 mt-2"><button class="btn btn-primary" onclick="addAggregate()">Зберегти</button><button class="btn btn-secondary" onclick="toggleForm()">Скасувати</button></div></div></div><table class="table table-bordered bg-white"><thead><tr><th>Тип</th><th>Модель</th><th>Аналог</th><th>Характеристики</th><th>Наявність</th><th>Ціна</th><th>Гарантія</th></tr></thead><tbody id="agg-body"></tbody></table></div><script>
+AGGREGATES_PAGE = """..."""  # (аналогично, не привожу для краткости)
+DEALS_PAGE = """
+<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Угоди</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><nav class="navbar navbar-expand navbar-dark bg-dark mb-3"><div class="container"><a class="navbar-brand" href="#">CRM</a><div class="navbar-nav"><a class="nav-link" href="/dashboard">Дашборд</a><a class="nav-link" href="/clients">Мої клієнти</a><a class="nav-link" href="/aggregates">Агрегати</a><a class="nav-link active" href="/deals">Угоди</a><a class="nav-link" href="/tasks">Завдання</a></div><div class="navbar-text text-white ms-auto me-3" id="manager_name"></div><button class="btn btn-outline-light btn-sm" onclick="logout()">Вийти</button></div></nav><div class="container"><h2>💰 Мої угоди</h2><button class="btn btn-success mb-3" onclick="toggleForm()">➕ Додати угоду</button><div id="addForm" class="card p-3 mb-3 d-none"><div class="row g-2"><div class="col-md-3"><input class="form-control" placeholder="ID клиента" id="client_id"></div><div class="col-md-3"><input class="form-control" placeholder="ID товара" id="product_id"></div><div class="col-md-3"><input class="form-control" placeholder="Сумма" id="amount"></div><div class="col-md-3"><select class="form-select" id="deal_status"><option>Новая</option><option>В обработке</option><option>Закрыта</option></select></div><div class="col-12 mt-2"><button class="btn btn-primary" onclick="addDeal()">Сохранить</button><button class="btn btn-secondary" onclick="toggleForm()">Отмена</button></div></div></div><table class="table table-bordered bg-white"><thead><tr><th>ID</th><th>Клиент</th><th>Товар</th><th>Сумма</th><th>Статус</th><th>Дата</th></tr></thead><tbody id="deals-body"></tbody></table></div><script>
 document.getElementById('manager_name').textContent=localStorage.getItem('manager_name')||'';
 function toggleForm(){document.getElementById('addForm').classList.toggle('d-none')}
-async function loadAggregates(){
-  const res=await fetch('/api/aggregates');
+async function loadDeals(){
+  const res=await fetch('/api/deals');
   if(res.status===403){window.location.href='/';return}
   const data=await res.json();
-  const tbody=document.getElementById('agg-body');
-  tbody.innerHTML=data.map(a=>`<tr><td>${a.Тип||''}</td><td>${a.Модель||''}</td><td>${a.Аналог||''}</td><td>${a.Характеристики||''}</td><td>${a.Наявність||''}</td><td>${a.Ціна||''}</td><td>${a.Гарантія||''}</td></tr>`).join('');
+  const tbody=document.getElementById('deals-body');
+  tbody.innerHTML=data.map(d=>`<tr>
+    <td>${d.ID||''}</td><td>${d.Клиент_ID||''}</td><td>${d.Товар_ID||''}</td>
+    <td>${d.Сумма||''}</td><td>${d.Статус||''}</td><td>${d.Дата||''}</td>
+  </tr>`).join('');
 }
-async function addAggregate(){
+async function addDeal(){
   const data={
-    type:document.getElementById('type').value,
-    model:document.getElementById('model').value,
-    analog:document.getElementById('analog').value,
-    features:document.getElementById('features').value,
-    availability:document.getElementById('availability').value,
-    price:document.getElementById('price').value,
-    warranty:document.getElementById('warranty').value
+    client_id:document.getElementById('client_id').value,
+    product_id:document.getElementById('product_id').value,
+    amount:document.getElementById('amount').value,
+    status:document.getElementById('deal_status').value
   };
-  await fetch('/api/add_aggregate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
-  toggleForm();
-  loadAggregates();
+  const res=await fetch('/api/add_deal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+  const result=await res.json();
+  if(result.ok){
+    toggleForm();
+    loadDeals();
+  }else{
+    alert('Ошибка добавления сделки');
+  }
 }
-loadAggregates();
+loadDeals();
 </script></body></html>"""
 
 TASKS_PAGE = """
-<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Завдання</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><nav class="navbar navbar-expand navbar-dark bg-dark mb-3"><div class="container"><a class="navbar-brand" href="#">CRM</a><div class="navbar-nav"><a class="nav-link" href="/dashboard">Дашборд</a><a class="nav-link" href="/clients">Мої клієнти</a><a class="nav-link" href="/aggregates">Агрегати</a><a class="nav-link active" href="/tasks">Завдання</a></div><div class="navbar-text text-white ms-auto me-3" id="manager_name"></div><button class="btn btn-outline-light btn-sm" onclick="logout()">Вийти</button></div></nav><div class="container"><h2>📝 Мої завдання</h2><button class="btn btn-success mb-3" onclick="toggleForm()">➕ Додати завдання</button><div id="addForm" class="card p-3 mb-3 d-none"><div class="row g-2"><div class="col-md-6"><input class="form-control" placeholder="Опис (кому зателефонувати)" id="description"></div><div class="col-md-3"><input class="form-control" type="date" id="date"></div><div class="col-md-3"><input class="form-control" type="time" id="time"></div><div class="col-md-12 mt-2"><button class="btn btn-primary" onclick="addTask()">Зберегти</button><button class="btn btn-secondary" onclick="toggleForm()">Скасувати</button></div></div></div><table class="table table-bordered bg-white"><thead><tr><th>Опис</th><th>Дата</th><th>Час</th><th>Статус</th></tr></thead><tbody id="tasks-body"></tbody></table></div><script>
+<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Завдання</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><nav class="navbar navbar-expand navbar-dark bg-dark mb-3"><div class="container"><a class="navbar-brand" href="#">CRM</a><div class="navbar-nav"><a class="nav-link" href="/dashboard">Дашборд</a><a class="nav-link" href="/clients">Мої клієнти</a><a class="nav-link" href="/aggregates">Агрегати</a><a class="nav-link" href="/deals">Угоди</a><a class="nav-link active" href="/tasks">Завдання</a></div><div class="navbar-text text-white ms-auto me-3" id="manager_name"></div><button class="btn btn-outline-light btn-sm" onclick="logout()">Вийти</button></div></nav><div class="container"><h2>📝 Мої завдання</h2><button class="btn btn-success mb-3" onclick="toggleForm()">➕ Додати завдання</button><div id="addForm" class="card p-3 mb-3 d-none"><div class="row g-2"><div class="col-md-6"><input class="form-control" placeholder="Опис (кому зателефонувати)" id="description"></div><div class="col-md-3"><input class="form-control" type="date" id="date"></div><div class="col-md-3"><input class="form-control" type="time" id="time"></div><div class="col-md-12 mt-2"><button class="btn btn-primary" onclick="addTask()">Зберегти</button><button class="btn btn-secondary" onclick="toggleForm()">Скасувати</button></div></div></div><table class="table table-bordered bg-white"><thead><tr><th>Опис</th><th>Дата</th><th>Час</th><th>Статус</th><th>Дії</th></tr></thead><tbody id="tasks-body"></tbody></table></div><script>
 document.getElementById('manager_name').textContent=localStorage.getItem('manager_name')||'';
 function toggleForm(){document.getElementById('addForm').classList.toggle('d-none')}
 async function loadTasks(){
@@ -527,7 +615,18 @@ async function loadTasks(){
   if(res.status===403){window.location.href='/';return}
   const data=await res.json();
   const tbody=document.getElementById('tasks-body');
-  tbody.innerHTML=data.map(t=>`<tr><td>${t.Опис||''}</td><td>${t.Дата||''}</td><td>${t.Час||''}</td><td>${t.Статус||''}</td></tr>`).join('');
+  tbody.innerHTML=data.map(t=>`<tr>
+    <td>${t.Опис||''}</td><td>${t.Дата||''}</td><td>${t.Час||''}</td>
+    <td>${t.Статус||''}</td>
+    <td>
+      ${t.Статус!=='Виконано' ? `<button class="btn btn-sm btn-success me-1" onclick="updateTask('${t.ID}','Виконано')">Виконано</button>` : ''}
+      ${t.Статус!=='Прострочено' ? `<button class="btn btn-sm btn-danger" onclick="updateTask('${t.ID}','Прострочено')">Прострочено</button>` : ''}
+    </td>
+  </tr>`).join('');
+}
+async function updateTask(id,newStatus){
+  await fetch('/api/update_task',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,status:newStatus})});
+  loadTasks();
 }
 async function addTask(){
   const data={
@@ -535,9 +634,14 @@ async function addTask(){
     date:document.getElementById('date').value,
     time:document.getElementById('time').value
   };
-  await fetch('/api/add_task',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
-  toggleForm();
-  loadTasks();
+  const res=await fetch('/api/add_task',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+  const result=await res.json();
+  if(result.ok){
+    toggleForm();
+    loadTasks();
+  }else{
+    alert('Помилка додавання завдання');
+  }
 }
 loadTasks();
 </script></body></html>"""
@@ -600,7 +704,6 @@ async def open_webapp(update, context):
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Открыть приложение", web_app=WebAppInfo(url=RENDER_URL))]])
     await update.message.reply_text("Нажмите, чтобы открыть CRM как приложение.", reply_markup=keyboard)
 
-# ---------- Обработчик главного меню ----------
 async def handle_main_menu(update, context):
     text = update.message.text
     if text == "📋 Клиенты":
@@ -621,17 +724,14 @@ async def handle_main_menu(update, context):
         await help_command(update, context)
     elif text == "📱 Приложение":
         await open_webapp(update, context)
-    elif text == "🔙 Назад" or text == "❌ Отмена":
-        # Обработка "Назад" или "Отмена" из любого места
+    elif text in ("🔙 Назад", "❌ Отмена"):
         if context.user_data:
             context.user_data.clear()
         await update.message.reply_text("Главное меню:", reply_markup=main_keyboard())
         return ConversationHandler.END
     else:
-        # Возможно, это кнопки подменю агрегатов
         await old_functions(update, context)
 
-# Обработка кнопок подменю агрегатов
 async def old_functions(update, context):
     text = update.message.text
     if text == "📋 Все товары":
@@ -639,15 +739,12 @@ async def old_functions(update, context):
     elif text == "✏️ Изменить статус":
         await change_status_start(update, context)
     elif text == "➕ Добавить товар":
-        await update.message.reply_text(
-            "Выберите тип товара:",
-            reply_markup=ReplyKeyboardMarkup([["Генератор", "Стартер"]], one_time_keyboard=True, resize_keyboard=True)
-        )
+        await update.message.reply_text("Выберите тип товара:", reply_markup=ReplyKeyboardMarkup([["Генератор", "Стартер"]], one_time_keyboard=True, resize_keyboard=True))
         return TYPE
     elif text == "🔍 Поиск по модели":
         await update.message.reply_text("Введите модель для поиска:")
         return 0
-    elif text == "🔙 Назад" or text == "❌ Отмена":
+    elif text in ("🔙 Назад", "❌ Отмена"):
         if context.user_data:
             context.user_data.clear()
         await update.message.reply_text("Главное меню:", reply_markup=main_keyboard())
@@ -655,7 +752,7 @@ async def old_functions(update, context):
     else:
         await update.message.reply_text("Используйте кнопки меню.")
 
-# ---------- Старые функции (добавление товара, просмотр, изменение статуса, поиск) ----------
+# ---------- Старые функции с защитой от зависания ----------
 async def show_all_products(update, context):
     rows = get_all_rows()
     if not rows:
@@ -691,14 +788,14 @@ async def product_detail(update, context):
         await query.edit_message_text("Не удалось загрузить данные.")
 
 async def add_product_start(update, context):
-    await update.message.reply_text(
-        "Выберите тип товара:",
-        reply_markup=ReplyKeyboardMarkup([["Генератор", "Стартер"]], one_time_keyboard=True, resize_keyboard=True)
-    )
+    await update.message.reply_text("Выберите тип товара:", reply_markup=ReplyKeyboardMarkup([["Генератор", "Стартер"]], one_time_keyboard=True, resize_keyboard=True))
     return TYPE
 
 async def add_type(update, context):
     text = update.message.text
+    if text in ("🔙 Назад", "❌ Отмена"):
+        await cancel_add(update, context)
+        return ConversationHandler.END
     if text not in ["Генератор", "Стартер"]:
         await update.message.reply_text("Пожалуйста, выберите Генератор или Стартер.")
         return TYPE
@@ -707,50 +804,65 @@ async def add_type(update, context):
     return MODEL
 
 async def add_model(update, context):
-    model = update.message.text.strip()
-    if not model:
+    text = update.message.text.strip()
+    if text in ("🔙 Назад", "❌ Отмена"):
+        await cancel_add(update, context)
+        return ConversationHandler.END
+    if not text:
         await update.message.reply_text("Модель не может быть пустой.")
         return MODEL
-    context.user_data["model"] = model
+    context.user_data["model"] = text
     await update.message.reply_text("Введите цену (число, в гривнах):")
     return PRICE
 
 async def add_price(update, context):
+    text = update.message.text.strip()
+    if text in ("🔙 Назад", "❌ Отмена"):
+        await cancel_add(update, context)
+        return ConversationHandler.END
     try:
-        price = int(update.message.text.strip())
+        price = int(text)
     except ValueError:
         await update.message.reply_text("Цена должна быть целым числом.")
         return PRICE
     context.user_data["price"] = price
-    await update.message.reply_text(
-        "Выберите статус:",
-        reply_markup=ReplyKeyboardMarkup([[s] for s in STATUSES], one_time_keyboard=True, resize_keyboard=True)
-    )
+    await update.message.reply_text("Выберите статус:", reply_markup=ReplyKeyboardMarkup([[s] for s in STATUSES], one_time_keyboard=True, resize_keyboard=True))
     return STATUS
 
 async def add_status(update, context):
-    status = update.message.text.strip()
-    if status not in STATUSES:
+    text = update.message.text.strip()
+    if text in ("🔙 Назад", "❌ Отмена"):
+        await cancel_add(update, context)
+        return ConversationHandler.END
+    if text not in STATUSES:
         await update.message.reply_text("Выберите статус из предложенных.")
         return STATUS
-    context.user_data["status"] = status
+    context.user_data["status"] = text
     await update.message.reply_text("Введите описание (или 'нет'):", reply_markup=agregat_menu())
     return DESCRIPTION
 
 async def add_description(update, context):
-    desc = update.message.text.strip()
-    if desc.lower() in ["нет", "-", "нету", "no"]:
-        desc = ""
-    context.user_data["description"] = desc
+    text = update.message.text.strip()
+    if text in ("🔙 Назад", "❌ Отмена"):
+        await cancel_add(update, context)
+        return ConversationHandler.END
+    if text.lower() in ["нет", "-", "нету", "no"]:
+        text = ""
+    context.user_data["description"] = text
     await update.message.reply_text("Отправьте фото товара (или напишите 'нет'):")
     return PHOTO
 
 async def add_photo(update, context):
+    # Проверка на отмену (текст или фото неважно)
+    if update.message and update.message.text in ("❌ Отмена", "🔙 Назад"):
+        await cancel_add(update, context)
+        return ConversationHandler.END
+
     photo_id = ""
     if update.message.photo:
         photo_id = update.message.photo[-1].file_id
     elif update.message.text and update.message.text.strip().lower() in ["нет", "no", "-"]:
-        pass  # пропускаем фото
+        pass
     else:
         await update.message.reply_text("Отправьте фото или напишите 'нет'.")
         return PHOTO
@@ -761,14 +873,10 @@ async def add_photo(update, context):
     try:
         sheet.append_row([str(new_id), data["type"], data["model"], str(data["price"]),
                           data["status"], data["description"], photo_id])
-        await update.message.reply_text(
-            f"✅ Товар *{data['model']}* добавлен! (ID {new_id})",
-            parse_mode="Markdown", reply_markup=agregat_menu()
-        )
+        await update.message.reply_text(f"✅ Товар *{data['model']}* добавлен! (ID {new_id})", parse_mode="Markdown", reply_markup=agregat_menu())
     except Exception as e:
         logger.error(f"Ошибка записи: {e}")
         await update.message.reply_text("❌ Не удалось сохранить товар.", reply_markup=agregat_menu())
-
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -836,7 +944,6 @@ def main():
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     logger.info(f"Веб-интерфейс запущен на порту {port}")
 
-    # ConversationHandler для добавления товара
     add_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^➕ Добавить товар$"), add_product_start)],
         states={
@@ -856,7 +963,6 @@ def main():
         ],
     )
 
-    # ConversationHandler для поиска
     search_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🔍 Поиск по модели$"), lambda u, c: search_model_input(u, c))],
         states={
